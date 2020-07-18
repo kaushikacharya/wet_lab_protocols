@@ -57,7 +57,7 @@ class Document:
                 self.parse_sentence(current_sentence_tags=current_sentence_tags, char_pos=char_pos)
 
     def parse_sentence(self, current_sentence_tags, char_pos):
-        """Parse sentence
+        """Parse sentence to populate words, sentences and entity annotations.
 
             Parameters:
             ----------
@@ -78,12 +78,12 @@ class Document:
                 start_char_pos_sent = start_char_pos_word
 
             if ner_tag != "O":
-                tag_tokens = ner_tag.split("-")
-                assert len(tag_tokens) == 2, "Expected format B-TAG or I-TAG. NER tag: {}".format(ner_tag)
-                if tag_tokens[0] == "B":
-                    entity_ann = EntityAnnotation(start_word_index=len(self.words), end_word_index=len(self.words)+1, entity_type=tag_tokens[1])
+                split_index = ner_tag.find("-")
+                assert split_index > 0, "Expected format B-TAG or I-TAG. NER tag: {}".format(ner_tag)
+                if ner_tag[:split_index] == "B":
+                    entity_ann = EntityAnnotation(start_word_index=len(self.words), end_word_index=len(self.words)+1, entity_type=ner_tag[split_index+1:])
                     self.entity_annotations.append(entity_ann)
-                elif tag_tokens[0] == "I":
+                elif ner_tag[:split_index] == "I":
                     self.entity_annotations[-1].end_word_index = len(self.words)+1
                 else:
                     assert False, "Expected format B-TAG or I-TAG. NER tag: {}".format(ner_tag)
@@ -146,6 +146,7 @@ class Document:
                         ann_index, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text))
 
 
+        print("\n\nEntity Annotations:")
         for ann_i in range(len(self.entity_annotations)):
             start_word_index_ann = self.entity_annotations[ann_i].start_word_index
             end_word_index_ann = self.entity_annotations[ann_i].end_word_index
@@ -154,7 +155,7 @@ class Document:
             entity_text = " ".join([self.text[self.words[word_index].start_char_pos: self.words[word_index].end_char_pos]
                                     for word_index in range(start_word_index_ann, end_word_index_ann)])
 
-            print("Entity annotation #{} :: word index range: ({}, {}) :: type: {} :: text: {}".format(
+            print("\tEntity annotation #{} :: word index range: ({}, {}) :: type: {} :: text: {}".format(
                 ann_i, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text))
 
 class Sentence:
