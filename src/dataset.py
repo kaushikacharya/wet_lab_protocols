@@ -12,6 +12,7 @@ Observation: Step can have multiple sentences e.g. protocol_101 (line #2)
 """
 
 
+import argparse
 import codecs
 import os
 import re
@@ -307,16 +308,20 @@ class Document:
 
 
 if __name__ == "__main__":
-    protocol_id = 101
-    data_folder = "C:/KA/lib/WNUT_2020/data/train_data/"
-    file_document = os.path.join(data_folder, "Standoff_Format/protocol_" + str(protocol_id) + ".txt")
-    file_conll_ann = os.path.join(data_folder, "Conll_Format/protocol_" + str(protocol_id) + "_conll.txt")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--protocol_id", action="store", dest="protocol_id")
+    parser.add_argument("--data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="data_dir")
+
+    args = parser.parse_args()
+
+    file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
+    file_conll_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
 
     obj_nlp_process = NLPProcess()
     obj_nlp_process.load_nlp_model(verbose=True)
     obj_nlp_process.build_sentencizer(verbose=True)
 
-    document_obj = Document(doc_id=protocol_id, nlp_process_obj=obj_nlp_process)
+    document_obj = Document(doc_id=int(args.protocol_id), nlp_process_obj=obj_nlp_process)
     document_obj.parse_document(document_file=file_document)
     document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann)
     document_obj.display_document()
