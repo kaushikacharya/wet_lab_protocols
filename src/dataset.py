@@ -14,11 +14,9 @@ Observation: Step can have multiple sentences e.g. protocol_101 (line #2)
 
 import argparse
 import codecs
-import os
 import re
 
 from .annotation import *
-from .nlp_process import *
 
 
 class Line:
@@ -37,9 +35,14 @@ class Line:
 
 class Word:
     """Word class is associated with Line class."""
-    def __init__(self, start_char_pos=None, end_char_pos=None):
+    def __init__(self, start_char_pos=None, end_char_pos=None, start_token_index=None, end_token_index=None):
         self.start_char_pos = start_char_pos
         self.end_char_pos = end_char_pos
+        # mapping word to token
+        self.start_token_index = start_token_index
+        # Though usually end_token_index can be extracted from next word's start_token_index, but there are exceptions
+        # in which tokens are formed in space between the words. e.g. protocol #3: Line #9
+        self.end_token_index = end_token_index
 
 
 class Sentence:
@@ -72,6 +75,9 @@ class Token:
 class Document:
     """Protocol document"""
     def __init__(self, doc_id, nlp_process_obj):
+        """Assumption:
+            Lists are stored in sequential order i.e. i'th element comes before elements at position (i+1)'th onwards.
+        """
         self.id = doc_id
         self.text = None
 
@@ -93,11 +99,11 @@ class Document:
         """Load the document text
         """
         try:
-            with codecs.open(filename=document_file, mode="r", encoding="utf-8") as fd:
+            with open(document_file, mode="r", encoding="utf-8") as fd:
                 text = fd.read()
 
             # remove carriage return as annotations are based on unix style line ending
-            self.text = re.sub(r'\r', '', text)
+            self.text = re.sub(r'\r\n', '\n', text)
         except Exception as err:
             print(err)
 
@@ -112,7 +118,7 @@ class Document:
                 if line == "":
                     # empty line represents protocol step change
                     if len(current_line_tags) > 0:
-                        self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos)
+                        self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
 
                         # update char_pos to end of latest added protocol step
                         char_pos = self.lines[-1].end_char_pos
@@ -124,9 +130,9 @@ class Document:
                     current_line_tags.append(tuple(tokens))
 
             if len(current_line_tags) > 0:
-                self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos)
+                self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
 
-    def parse_protocol_step(self, current_line_tags, char_pos):
+    def parse_protocol_step(self, current_line_tags, char_pos, verbose=False):
         """Parse protocol step to populate words, lines and entity annotations.
 
             Parameters:
@@ -141,12 +147,22 @@ class Document:
             parse_conll_annotation
         """
         start_char_pos_line = None
-        start_word_index = len(self.words)
+        start_word_index_line = len(self.words)
         start_entity_ann_index = len(self.entity_annotations)
 
         for i, (word, ner_tag) in enumerate(current_line_tags):
-            start_char_pos_word = char_pos + self.text[char_pos:].find(word)
-            end_char_pos_word = start_char_pos_word + len(word)
+            if word == "``" or word == "''":
+                # case: Double quotes changed by Penn Treebank Tokenizer
+                # https://stackoverflow.com/questions/31074682/nltk-word-tokenize-changes-quotes/63334845
+                start_char_pos_relative = self.text[char_pos:].find('"')
+                word_length = 1
+            else:
+                start_char_pos_relative = self.text[char_pos:].find(word)
+                word_length = len(word)
+
+            assert start_char_pos_relative >= 0, "word: {} not found".format(word.encode("utf-8"))
+            start_char_pos_word = char_pos + start_char_pos_relative
+            end_char_pos_word = start_char_pos_word + word_length
 
             if i == 0:
                 start_char_pos_line = start_char_pos_word
@@ -176,12 +192,25 @@ class Document:
         # reset char position to start position of protocol step
         char_pos = start_char_pos_line
 
+        if verbose:
+            line_text = self.text[start_char_pos_line: end_char_pos_line]
+            print("-----------------------------------------------------------")
+            print("\nLine: {}\n".format(line_text.encode("utf-8")))
+
         # Segment protocol step into sentence(s)
         sents = self.nlp_process_obj.sent_tokenize(text=self.text[start_char_pos_line: end_char_pos_line])
+
+        # initialize word_index to the first word of the line i.e. protocol step
+        word_index = start_word_index_line
 
         for sent in sents:
             # sent type: Span (https://spacy.io/api/span)
             sent_text = sent.text
+
+            if verbose:
+                print("\nSentence: {}".format(sent_text.encode("utf-8")))
+
+            # Compute char position range for the sentence
             start_char_pos_relative = self.text[char_pos:].find(sent_text)
             assert start_char_pos_relative >= 0,\
                 "Sentence not found from char position: {} onwards. Sentence text: {}".format(char_pos, sent_text)
@@ -195,8 +224,107 @@ class Document:
                 start_char_pos_token = char_pos + self.text[char_pos:].find(token.text)
                 end_char_pos_token = start_char_pos_token + len(token.text)
 
+                if verbose:
+                    word_text = self.text[self.words[word_index].start_char_pos: self.words[word_index].end_char_pos]
+                    print("\ttoken: {} :: char pos range(token): ({}, {}) :: word: {} :: word_index: {} :: char pos range(word): ({}, {})".format(
+                        token.text.encode("utf-8"), start_char_pos_token, end_char_pos_token, word_text.encode("utf-8"),
+                        word_index, self.words[word_index].start_char_pos, self.words[word_index].end_char_pos))
+
                 head_index_token = token.head.i + n_tokens_upto_prev_sent
                 children_index_arr_token = [(child.i + n_tokens_upto_prev_sent) for child in token.children]
+
+                # ----- Map token(s) to the word(s) --------
+
+                # Usually token to word map is one-to-one.
+                # Exceptions: a) many-to-one e.g. word: 37°C  tokens: [37, °, C]
+                #             b) one-to-many e.g. token: node?The  words: [node, ?, The] (source: protocol_101  line #23)
+                # Exception (b) is rare.
+
+                if end_char_pos_token <= self.words[word_index].start_char_pos:
+                    # case: token represents space between the current(represented by word_index) and previous word
+                    #       Since this token is formed between words, hence not mapped to any word.
+                    pass
+                elif start_char_pos_token >= self.words[word_index].end_char_pos:
+                    assert word_index == (len(self.words)-1), "token not expected beyond the word_index: {}".format(word_index)
+                else:
+                    # case: token maps to the word represented by word_index
+
+                    # update word to token map
+                    if self.words[word_index].start_token_index is None:
+                        # case: First token belonging to the word
+                        self.words[word_index].start_token_index = len(self.tokens)
+
+                    # update the end_token_index
+                    self.words[word_index].end_token_index = len(self.tokens) + 1
+
+                    # Now look into the different sub-cases
+                    if end_char_pos_token == self.words[word_index].end_char_pos:
+                        # case: token's end is same as word's (represented by word_index) end
+                        # increment word_index if its not the last word of this line
+                        # increment ensures that next token is matched with updated word_index's word
+                        if word_index < (len(self.words)-1):
+                            word_index += 1
+                    elif end_char_pos_token < self.words[word_index].end_char_pos:
+                        # case: multiple tokens split from the word
+                        # More token(s) belong to the word. Hence word_index not incremented.
+                        pass
+                    else:
+                        # case: More word(s) map to the current token
+                        while word_index < (len(self.words)-1) and (self.words[word_index+1].start_char_pos < end_char_pos_token):
+                            word_index += 1
+                            # update word to token map
+                            self.words[word_index].start_token_index = len(self.tokens)
+                            self.words[word_index].end_token_index = len(self.tokens) + 1
+
+                        # increment word_index if its not the last word of this line
+                        if word_index < (len(self.words)-1):
+                            word_index += 1
+
+                '''
+                # Usually token should either map to word represented by word_index or to the next word
+                # Exception: token is formed from the space between words. In this case, skip the mapping.
+                if end_char_pos_token <= self.words[word_index].start_char_pos:
+                    # case: token represents space before the first word of the sentence
+                    pass
+                elif start_char_pos_token < self.words[word_index].end_char_pos:
+                    # case: token maps to the word represented by word_index
+                    if self.words[word_index].start_token_index is None:
+                        # case: First token belonging to the word
+                        self.words[word_index].start_token_index = len(self.tokens)
+
+                    # update the end_token_index
+                    self.words[word_index].end_token_index = len(self.tokens) + 1
+                else:
+                    # Now the token needs to be checked if it belongs to the next word(if available)
+
+                    # case a: token maps to the space after the word represented by word_index
+                    # case b: token maps to the next word
+                    if word_index < len(self.words)-1:
+                        word_index += 1
+
+                        token_text = self.text[start_char_pos_token: end_char_pos_token]
+                        word_text = self.text[self.words[word_index].start_char_pos: self.words[word_index].end_char_pos]
+
+                        assert start_char_pos_token < self.words[word_index].end_char_pos,\
+                            "No corresponding token for the word_index: {} :: word: {} :: token: {} :: " \
+                            "char pos range: (word): ({},{}) : (token): ({},{}) ".format(
+                                word_index, word_text.encode("utf-8"), token_text.encode("utf-8"),
+                                self.words[word_index].start_char_pos, self.words[word_index].end_char_pos,
+                                start_char_pos_token, end_char_pos_token
+                            )
+
+                        if start_char_pos_token >= self.words[word_index].start_char_pos:
+                            self.words[word_index].start_token_index = len(self.tokens)
+                            self.words[word_index].end_token_index = len(self.tokens) + 1
+                            if verbose:
+                                word_text = self.text[
+                                            self.words[word_index].start_char_pos: self.words[word_index].end_char_pos]
+                                print("\t\tToken mapped to word_index: {} :: word: {}".format(word_index, word_text.encode("utf-8")))
+
+                if (word_index < len(self.words)) and (start_char_pos_token >= self.words[word_index].end_char_pos):
+                    # token maps to next word
+                    word_index += 1
+                '''
 
                 cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token,
                                   part_of_speech=token.pos_, dependency_tag=token.dep_, head_index=head_index_token,
@@ -204,7 +332,7 @@ class Document:
                 self.tokens.append(cur_token)
 
                 # update char position to end of current token
-                char_pos = start_char_pos_token
+                char_pos = end_char_pos_token
 
             # append sentence to sentence list
             self.sentences.append(Sentence(start_char_pos=start_char_pos_sent, end_char_pos=end_char_pos_sent,
@@ -215,10 +343,11 @@ class Document:
 
         # append line to line list
         self.lines.append(Line(start_char_pos=start_char_pos_line, end_char_pos=char_pos,
-                               start_word_index=start_word_index, end_word_index=len(self.words),
+                               start_word_index=start_word_index_line, end_word_index=len(self.words),
                                start_sent_index=n_sents_upto_prev_line, end_sent_index=len(self.sentences)))
 
     def display_document(self):
+        print("Document id: {}".format(self.id))
         ann_i = 0
         for line_i in range(len(self.lines)):
             start_char_pos_line = self.lines[line_i].start_char_pos
@@ -229,14 +358,20 @@ class Document:
             line_text = self.text[start_char_pos_line: end_char_pos_line]
 
             print("\n\nLine #{} :: char pos range: ({}, {}) :: sent range: ({}, {}) :: text: {}".format(
-                line_i, start_char_pos_line, end_char_pos_line, start_sent_index_line, end_sent_index_line, line_text))
+                line_i, start_char_pos_line, end_char_pos_line, start_sent_index_line, end_sent_index_line,
+                line_text.encode("utf-8")))
 
             start_word_index_sent = self.lines[line_i].start_word_index
             end_word_index_sent = self.lines[line_i].end_word_index
 
             for word_index in range(start_word_index_sent, end_word_index_sent):
-                word_text = self.text[self.words[word_index].start_char_pos: self.words[word_index].end_char_pos]
-                print("\tword #{}: {}".format(word_index, word_text))
+                start_char_pos_word = self.words[word_index].start_char_pos
+                end_char_pos_word = self.words[word_index].end_char_pos
+                word_text = self.text[start_char_pos_word: end_char_pos_word]
+                start_token_index = self.words[word_index].start_token_index
+                end_token_index = self.words[word_index].end_token_index
+                print("\tword #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {})".format(
+                    word_index, word_text.encode("utf-8"), start_char_pos_word, end_char_pos_word, start_token_index, end_token_index))
 
             for sent_index in range(start_sent_index_line, end_sent_index_line):
                 start_char_pos_sent = self.sentences[sent_index].start_char_pos
@@ -244,7 +379,7 @@ class Document:
                 sent_text = self.text[start_char_pos_sent: end_char_pos_sent]
 
                 print("\nSentence #{} :: char pos range: ({}, {}) :: text: {}".format(
-                    sent_index, start_char_pos_sent, end_char_pos_sent, sent_text))
+                    sent_index, start_char_pos_sent, end_char_pos_sent, sent_text.encode("utf-8")))
 
                 start_token_index_sent = self.sentences[sent_index].start_token_index
                 end_token_index_sent = self.sentences[sent_index].end_token_index
@@ -258,9 +393,9 @@ class Document:
                     head_index_token = self.tokens[token_index].head_index
 
                     print("\tToken #{} :: char pos range: ({}, {}) :: text: {} :: POS: {} :: Dependency: {} :: "
-                          "Head:  {}".format(
-                        token_index, start_char_pos_token, end_char_pos_token, token_text, token_part_of_speech,
-                        token_dependency_tag, head_index_token))
+                          "Head: {}".format(token_index, start_char_pos_token, end_char_pos_token,
+                                            token_text.encode("utf-8"), token_part_of_speech,
+                                            token_dependency_tag, head_index_token))
 
             # Find the entity annotations belonging to the line
             ann_index_sent_arr = []
@@ -291,7 +426,7 @@ class Document:
                          for word_index in range(start_word_index_ann, end_word_index_ann)])
 
                     print("\tEntity annotation #{} :: word index range: ({}, {}) :: type: {} :: text: {}".format(
-                        ann_index, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text))
+                        ann_index, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text.encode("utf-8")))
 
 
         print("\n\nEntity Annotations:")
@@ -304,25 +439,30 @@ class Document:
                                     for word_index in range(start_word_index_ann, end_word_index_ann)])
 
             print("\tEntity annotation #{} :: word index range: ({}, {}) :: type: {} :: text: {}".format(
-                ann_i, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text))
+                ann_i, start_word_index_ann, end_word_index_ann, entity_type_ann, entity_text.encode("utf-8")))
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--protocol_id", action="store", dest="protocol_id")
-    parser.add_argument("--data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="data_dir")
-
-    args = parser.parse_args()
+def main(args):
+    import os
+    from .nlp_process import NLPProcess
 
     file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
     file_conll_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
 
-    obj_nlp_process = NLPProcess()
+    obj_nlp_process = NLPProcess(model=args.model)
     obj_nlp_process.load_nlp_model(verbose=True)
     obj_nlp_process.build_sentencizer(verbose=True)
 
     document_obj = Document(doc_id=int(args.protocol_id), nlp_process_obj=obj_nlp_process)
     document_obj.parse_document(document_file=file_document)
-    document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann)
+    document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann, verbose=args.verbose)
     document_obj.display_document()
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--protocol_id", action="store", dest="protocol_id")
+    parser.add_argument("--data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="data_dir")
+    parser.add_argument("--model", action="store", default="en_core_web_sm", dest="model")
+    parser.add_argument("--verbose", action="store_true", default=False, dest="verbose")
+
+    args = parser.parse_args()
+    main(args=args)
