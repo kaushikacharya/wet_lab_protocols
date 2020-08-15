@@ -5,10 +5,24 @@ Load dataset and the annotations.
 
 Data Format:
 -----------
-http://noisy-text.github.io/2020/wlp-task.html#format
+    http://noisy-text.github.io/2020/wlp-task.html#format
 
-Each line of the protocol text indicates a single step in the protocol.
-Observation: Step can have multiple sentences e.g. protocol_101 (line #2)
+    Each line of the protocol text indicates a single step in the protocol.
+    Observation: Step can have multiple sentences e.g. protocol_101 (line #2)
+
+Word Tokenizers:
+---------------
+    Following two tokenizers have been used:
+
+    1. Penn Treebank Tokenizer
+        "Word" class represents the tokens formed by this tokenizer.
+        Named Entity labels are mapped to Word.
+    2. spaCy's word tokenizer
+        "Token" class represents the tokens formed by this tokenizer.
+        Syntactic features: part-of-speech tagging, dependency parse are associated with these tokens.
+
+    Mapping of "Word" to "Token" class are done based on the text span.
+
 """
 
 
@@ -46,11 +60,17 @@ class Word:
 
 
 class Sentence:
-    def __init__(self, start_char_pos=None, end_char_pos=None, start_token_index=None, end_token_index=None):
+    """Represents sentence in a linguistic sense."""
+    def __init__(self, start_char_pos=None, end_char_pos=None, start_token_index=None, end_token_index=None,
+                 start_word_index=None, end_word_index=None):
         self.start_char_pos = start_char_pos
         self.end_char_pos = end_char_pos
         self.start_token_index = start_token_index
         self.end_token_index = end_token_index
+        # word index range
+        # Though Word is associated with Line, but storing word index range is required for feature extraction.
+        self.start_word_index = start_word_index
+        self.end_word_index = end_word_index
 
 
 class Token:
@@ -202,6 +222,8 @@ class Document:
 
         # initialize word_index to the first word of the line i.e. protocol step
         word_index = start_word_index_line
+        # As we iterate over the tokens of the sentence to map with the words of the line,
+        #  ensure that word_index stays within the line.
 
         for sent in sents:
             # sent type: Span (https://spacy.io/api/span)
@@ -216,6 +238,8 @@ class Document:
                 "Sentence not found from char position: {} onwards. Sentence text: {}".format(char_pos, sent_text)
             start_char_pos_sent = char_pos + start_char_pos_relative
             end_char_pos_sent = start_char_pos_sent + len(sent_text)
+
+            start_word_index_sent = word_index
 
             doc_sentence = self.nlp_process_obj.construct_doc(text=sent_text)
             n_tokens_upto_prev_sent = len(self.tokens)
@@ -243,8 +267,11 @@ class Document:
                 if end_char_pos_token <= self.words[word_index].start_char_pos:
                     # case: token represents space between the current(represented by word_index) and previous word
                     #       Since this token is formed between words, hence not mapped to any word.
+                    #       Rare instance. Happens when a token is formed in the space between words.
                     pass
                 elif start_char_pos_token >= self.words[word_index].end_char_pos:
+                    # Following assert ensures that token is entirely beyond the word represented by word_index
+                    # only when token is formed by the space beyond the last word of the protocol step.
                     assert word_index == (len(self.words)-1), "token not expected beyond the word_index: {}".format(word_index)
                 else:
                     # case: token maps to the word represented by word_index
@@ -266,7 +293,7 @@ class Document:
                             word_index += 1
                     elif end_char_pos_token < self.words[word_index].end_char_pos:
                         # case: multiple tokens split from the word
-                        # More token(s) belong to the word. Hence word_index not incremented.
+                        # Next token(s) expected to belong to the word. Hence word_index not incremented.
                         pass
                     else:
                         # case: More word(s) map to the current token
@@ -334,9 +361,17 @@ class Document:
                 # update char position to end of current token
                 char_pos = end_char_pos_token
 
+            # set end word index for the sentence
+            # Current word_index could either point to the last word of the sentence or the first word of the next sentence.
+            if self.words[word_index].start_char_pos >= end_char_pos_sent:
+                end_word_index_sent = word_index
+            else:
+                end_word_index_sent = word_index + 1
+
             # append sentence to sentence list
             self.sentences.append(Sentence(start_char_pos=start_char_pos_sent, end_char_pos=end_char_pos_sent,
-                                           start_token_index=n_tokens_upto_prev_sent, end_token_index=len(self.tokens)))
+                                           start_token_index=n_tokens_upto_prev_sent, end_token_index=len(self.tokens),
+                                           start_word_index=start_word_index_sent, end_word_index=end_word_index_sent))
 
             # update char position to the end of current sentence
             char_pos = end_char_pos_sent
@@ -347,7 +382,6 @@ class Document:
                                start_sent_index=n_sents_upto_prev_line, end_sent_index=len(self.sentences)))
 
     def display_document(self):
-        print("Document id: {}".format(self.id))
         ann_i = 0
         for line_i in range(len(self.lines)):
             start_char_pos_line = self.lines[line_i].start_char_pos
@@ -361,10 +395,10 @@ class Document:
                 line_i, start_char_pos_line, end_char_pos_line, start_sent_index_line, end_sent_index_line,
                 line_text.encode("utf-8")))
 
-            start_word_index_sent = self.lines[line_i].start_word_index
-            end_word_index_sent = self.lines[line_i].end_word_index
+            start_word_index_line = self.lines[line_i].start_word_index
+            end_word_index_line = self.lines[line_i].end_word_index
 
-            for word_index in range(start_word_index_sent, end_word_index_sent):
+            for word_index in range(start_word_index_line, end_word_index_line):
                 start_char_pos_word = self.words[word_index].start_char_pos
                 end_char_pos_word = self.words[word_index].end_char_pos
                 word_text = self.text[start_char_pos_word: end_char_pos_word]
@@ -376,10 +410,13 @@ class Document:
             for sent_index in range(start_sent_index_line, end_sent_index_line):
                 start_char_pos_sent = self.sentences[sent_index].start_char_pos
                 end_char_pos_sent = self.sentences[sent_index].end_char_pos
+                start_word_index_sent = self.sentences[sent_index].start_word_index
+                end_word_index_sent = self.sentences[sent_index].end_word_index
                 sent_text = self.text[start_char_pos_sent: end_char_pos_sent]
 
-                print("\nSentence #{} :: char pos range: ({}, {}) :: text: {}".format(
-                    sent_index, start_char_pos_sent, end_char_pos_sent, sent_text.encode("utf-8")))
+                print("\nSentence #{} :: char pos range: ({}, {}) :: word index range: ({}, {}) :: text: {}".format(
+                    sent_index, start_char_pos_sent, end_char_pos_sent, start_word_index_sent, end_word_index_sent,
+                    sent_text.encode("utf-8")))
 
                 start_token_index_sent = self.sentences[sent_index].start_token_index
                 end_token_index_sent = self.sentences[sent_index].end_token_index
@@ -404,10 +441,11 @@ class Document:
                 start_word_index_ann = self.entity_annotations[ann_i].start_word_index
                 end_word_index_ann = self.entity_annotations[ann_i].end_word_index
 
-                assert start_word_index_ann >= start_word_index_sent,\
-                    "annotation assignment to line missed by previous line. ann_i: {}".format(ann_i)
+                assert start_word_index_ann >= start_word_index_line,\
+                    "annotation assignment to line missed by previous line. ann_i: {} :: " \
+                    "word index range(ann): ({}, {})".format(ann_i, start_word_index_ann, end_word_index_ann)
 
-                if start_word_index_ann < end_word_index_sent:
+                if start_word_index_ann < end_word_index_line:
                     ann_index_sent_arr.append(ann_i)
                 else:
                     break
@@ -453,6 +491,7 @@ def main(args):
     obj_nlp_process.build_sentencizer(verbose=True)
 
     document_obj = Document(doc_id=int(args.protocol_id), nlp_process_obj=obj_nlp_process)
+    print("Document id: {}".format(document_obj.id))
     document_obj.parse_document(document_file=file_document)
     document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann, verbose=args.verbose)
     document_obj.display_document()
