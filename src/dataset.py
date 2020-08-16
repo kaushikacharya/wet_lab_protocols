@@ -49,7 +49,17 @@ class Line:
 
 class Word:
     """Word class is associated with Line class."""
-    def __init__(self, start_char_pos=None, end_char_pos=None, start_token_index=None, end_token_index=None):
+    def __init__(self, start_char_pos=None, end_char_pos=None, start_token_index=None, end_token_index=None, named_entity_label=None):
+        """
+
+        :param start_char_pos:
+        :param end_char_pos:
+        :param start_token_index:
+        :param end_token_index:
+        :param named_entity_label: str
+                            BIO format labeling for train data
+                            None for test data
+        """
         self.start_char_pos = start_char_pos
         self.end_char_pos = end_char_pos
         # mapping word to token
@@ -57,6 +67,7 @@ class Word:
         # Though usually end_token_index can be extracted from next word's start_token_index, but there are exceptions
         # in which tokens are formed in space between the words. e.g. protocol #3: Line #9
         self.end_token_index = end_token_index
+        self.named_entity_label = named_entity_label
 
 
 class Sentence:
@@ -187,7 +198,7 @@ class Document:
             if i == 0:
                 start_char_pos_line = start_char_pos_word
 
-            if ner_tag != "O":
+            if ner_tag is not None and ner_tag != "O":
                 split_index = ner_tag.find("-")
                 assert split_index > 0, "Expected format B-TAG or I-TAG. NER tag: {}".format(ner_tag)
                 if ner_tag[:split_index] == "B":
@@ -199,7 +210,7 @@ class Document:
                     assert False, "Expected format B-TAG or I-TAG. NER tag: {}".format(ner_tag)
 
             # append to word list
-            self.words.append(Word(start_char_pos=start_char_pos_word, end_char_pos=end_char_pos_word))
+            self.words.append(Word(start_char_pos=start_char_pos_word, end_char_pos=end_char_pos_word, named_entity_label=ner_tag))
 
             # update char position to the end of current word
             char_pos = end_char_pos_word
@@ -404,8 +415,10 @@ class Document:
                 word_text = self.text[start_char_pos_word: end_char_pos_word]
                 start_token_index = self.words[word_index].start_token_index
                 end_token_index = self.words[word_index].end_token_index
-                print("\tword #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {})".format(
-                    word_index, word_text.encode("utf-8"), start_char_pos_word, end_char_pos_word, start_token_index, end_token_index))
+                named_entity_label = self.words[word_index].named_entity_label
+                print("\tword #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {}) :: NER label: {}".format(
+                    word_index, word_text.encode("utf-8"), start_char_pos_word, end_char_pos_word, start_token_index,
+                    end_token_index, named_entity_label))
 
             for sent_index in range(start_sent_index_line, end_sent_index_line):
                 start_char_pos_sent = self.sentences[sent_index].start_char_pos
