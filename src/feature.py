@@ -47,7 +47,7 @@ class Feature:
                 print("\nSentence #{}: char pos range: ({}, {}) :: token index range: ({}, {}) :: "
                       "word index range: ({}, {}) :: text: {}".format(
                     sent_index, start_char_pos, end_char_pos, start_token_index, end_token_index, start_word_index,
-                    end_word_index, sent_text))
+                    end_word_index, sent_text.encode("utf-8")))
 
             sent_features = self.extract_sentence_features(sent_index=sent_index)
             doc_features.append(sent_features)
