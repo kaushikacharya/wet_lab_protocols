@@ -3,14 +3,14 @@
 """
 Load dataset and the annotations.
 
-Data Format:
+Data Format
 -----------
     http://noisy-text.github.io/2020/wlp-task.html#format
 
     Each line of the protocol text indicates a single step in the protocol.
     Observation: Step can have multiple sentences e.g. protocol_101 (line #2)
 
-Word Tokenizers:
+Word Tokenizers
 ---------------
     Following two tokenizers have been used:
 
@@ -28,6 +28,7 @@ Word Tokenizers:
 
 import argparse
 import codecs
+import nltk
 import re
 
 from .annotation import *
@@ -149,7 +150,7 @@ class Document:
                 if line == "":
                     # empty line represents protocol step change
                     if len(current_line_tags) > 0:
-                        self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
+                        self.parse_protocol_step_conll(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
 
                         # update char_pos to end of latest added protocol step
                         char_pos = self.lines[-1].end_char_pos
@@ -161,10 +162,72 @@ class Document:
                     current_line_tags.append(tuple(tokens))
 
             if len(current_line_tags) > 0:
-                self.parse_protocol_step(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
+                self.parse_protocol_step_conll(current_line_tags=current_line_tags, char_pos=char_pos, verbose=verbose)
 
-    def parse_protocol_step(self, current_line_tags, char_pos, verbose=False):
+    def parse_standoff_annotation(self, ann_file, verbose=False):
+        """Parse brat standoff formatted annotation file.
+
+            Reference
+            ---------
+            https://brat.nlplab.org/standoff.html
+        """
+        assert self.text is not None, "parse_document() is a pre-requisite"
+        # read the standoff annotations for the protocol
+        with codecs.open(filename=ann_file, mode="r", encoding="utf-8") as fd:
+            ann_tuple_arr = []
+            for line in fd:
+                line = line.strip()
+
+                if line == "":
+                    continue
+
+                # TODO Currently only text bound annotations are considered as focus on only named entities and ignoring the relations.
+                if line[0] != "T":
+                    continue
+
+                tokens = line.split("\t")
+                assert len(tokens) == 3, "Expected three tab separated tokens for line: {}".format(line)
+
+                entity_id = tokens[0]
+                char_index = tokens[1].find(" ")
+                assert char_index > 0, "space not found in middle token :: line: {}".format(line)
+                entity_type = tokens[1][:char_index]
+                entity_char_pos_arr = [int(x) for x in re.findall(r'\d+', tokens[1])]
+
+                ann_tuple_arr.append((entity_id, entity_type, entity_char_pos_arr))
+
+            # Now sort ann_tuple_arr wrt start character offset
+            ann_tuple_arr = sorted(ann_tuple_arr, key=lambda x: x[2][0])
+
+            if verbose:
+                print("{}".format([(x[0], x[2]) for x in ann_tuple_arr]))
+
+
+        # Now populate words, lines, sentences and map words to entity annotations
+        if False:
+            char_pos = 0
+            for m in re.finditer(r'\n+', self.text):
+                print(self.text[char_pos:m.start()])
+                char_pos = m.end()
+
+            # Handling the portion of the text(if available) after the final newline
+            if char_pos < len(self.text):
+                print(self.text[char_pos:])
+
+        # iterate over the protocol steps (represented by line of text)
+        char_pos = 0
+        for m in re.finditer(r'\n+', self.text):
+            self.parse_protocol_step_standoff(start_char_pos_line=char_pos, end_char_pos_line=m.start(), verbose=verbose)
+            # update char_pos to start of next line
+            char_pos = m.end()
+
+        # Processing the text after the final newline, if available
+        if char_pos < len(self.text):
+            self.parse_protocol_step_standoff(start_char_pos_line=char_pos, end_char_pos_line=len(self.text), verbose=verbose)
+
+    def parse_protocol_step_conll(self, current_line_tags, char_pos, verbose=False):
         """Parse protocol step to populate words, lines and entity annotations.
+            This uses CoNLL annotations.
 
             Parameters:
             ----------
@@ -246,7 +309,7 @@ class Document:
             # Compute char position range for the sentence
             start_char_pos_relative = self.text[char_pos:].find(sent_text)
             assert start_char_pos_relative >= 0,\
-                "Sentence not found from char position: {} onwards. Sentence text: {}".format(char_pos, sent_text)
+                "Sentence not found from char position: {} onwards. Sentence text: {}".format(char_pos, sent_text.encode("utf-8"))
             start_char_pos_sent = char_pos + start_char_pos_relative
             end_char_pos_sent = start_char_pos_sent + len(sent_text)
 
@@ -392,6 +455,142 @@ class Document:
                                start_word_index=start_word_index_line, end_word_index=len(self.words),
                                start_sent_index=n_sents_upto_prev_line, end_sent_index=len(self.sentences)))
 
+    def parse_protocol_step_standoff(self, start_char_pos_line, end_char_pos_line, verbose=False):
+        """Parse protocol step using Standoff format annotations.
+            Populate sentences, words, tokens for the protocol step.
+
+            Parameters
+            ----------
+            start_char_pos_line : int
+                character offset representing start of the protocol step text
+            end_char_pos_line : int
+                character offset representing end of the protocol step text
+            verbose : bool
+        """
+
+        if verbose:
+            line_text = self.text[start_char_pos_line: end_char_pos_line]
+            print("\nLine #{} :: char pos range: ({}, {}) :: text: {}".format(len(self.lines), start_char_pos_line,
+                                                                              end_char_pos_line, line_text.encode("utf-8")))
+
+        # store the count of sentences till now
+        start_sent_index_line = len(self.sentences)
+
+        # Segment protocol step text into sentence(s)
+        sents = self.nlp_process_obj.sent_tokenize(text=self.text[start_char_pos_line: end_char_pos_line])
+
+        char_pos = start_char_pos_line
+
+        for sent in sents:
+            # sent type: Span (https://spacy.io/api/span)
+            sent_text = sent.text
+
+            # Compute char position range for the sentence
+            start_char_pos_relative = self.text[char_pos:].find(sent_text)
+            assert start_char_pos_relative >= 0,\
+                "Sentence not found from char position: {} onwards. Sentence text: {}".format(
+                    char_pos, sent_text.encode("utf-8"))
+            start_char_pos_sent = char_pos + start_char_pos_relative
+            end_char_pos_sent = start_char_pos_sent + len(sent_text)
+
+            if verbose:
+                print("\n\tSentence #{}: char position span:({}, {}) :: text: {}".format(
+                    len(self.sentences), start_char_pos_sent, end_char_pos_sent, sent_text.encode("utf-8")))
+
+            # -------- Populate tokens of the current sentence ----------
+            # These tokens are created by spaCy pipeline.
+            doc_sentence = self.nlp_process_obj.construct_doc(text=sent_text)
+
+            start_token_index_sent = len(self.tokens)
+            for token in doc_sentence:
+                # character position span of the token
+                start_char_pos_token = char_pos + self.text[char_pos:].find(token.text)
+                end_char_pos_token = start_char_pos_token + len(token.text)
+
+                head_index_token = token.head.i + start_token_index_sent
+                children_index_arr_token = [(child.i + start_token_index_sent) for child in token.children]
+
+                if verbose:
+                    token_text = self.text[start_char_pos_token: end_char_pos_token]
+                    print("\t\tToken #{} :: char pos range: ({}, {}) :: text: {} :: POS: {} :: Dependency: {} ::"
+                          " Head: {}".format(len(self.tokens), start_char_pos_token, end_char_pos_token,
+                                             token_text.encode("utf-8"), token.pos_, token.dep_, head_index_token))
+
+                cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token,
+                                  part_of_speech=token.pos_, dependency_tag=token.dep_, head_index=head_index_token,
+                                  children_index_arr=children_index_arr_token)
+                self.tokens.append(cur_token)
+
+                # update char position to end of current token
+                char_pos = end_char_pos_token
+
+            # --------- Populate words of the current sentence -----------
+            word_tokens = nltk.word_tokenize(text=sent_text)
+
+            # set char position to the start of the sentence as it was moved ahead in the for loop for tokens
+            char_pos = start_char_pos_sent
+
+            start_word_index_sent = len(self.words)
+            token_index = start_token_index_sent
+
+            for word in word_tokens:
+                if word == "``" or word == "''":
+                    # case: Double quotes changed by Penn Treebank Tokenizer
+                    # https://stackoverflow.com/questions/31074682/nltk-word-tokenize-changes-quotes/63334845
+                    start_char_pos_relative = self.text[char_pos:].find('"')
+                    word_length = 1
+                else:
+                    start_char_pos_relative = self.text[char_pos:].find(word)
+                    word_length = len(word)
+
+                assert start_char_pos_relative >= 0, "word: {} not found".format(word.encode("utf-8"))
+                start_char_pos_word = char_pos + start_char_pos_relative
+                end_char_pos_word = start_char_pos_word + word_length
+
+                # ------ Map tokens overlapping with the current word ------
+                # case: Handling tokens formed in the space between words
+                while self.tokens[token_index].end_char_pos <= start_char_pos_word:
+                    token_index += 1
+                    assert token_index < len(self.tokens),\
+                        "no more tokens left, but still these are before the word represented by word_index: {}".format(len(self.words))
+
+                assert token_index < len(self.tokens), "token_index: {} moved beyond total tokens: {}".format(token_index, len(self.tokens))
+                assert self.tokens[token_index].start_char_pos < end_char_pos_word,\
+                    "No token matched with word(represented by word_index: {}) :: token_index: {}".format(len(self.words), token_index)
+
+                start_token_index_word = token_index
+
+                # iterate over the tokens which overlap with the current word
+                while (token_index < len(self.tokens)) and (self.tokens[token_index].end_char_pos < end_char_pos_word):
+                    token_index += 1
+
+                end_token_index_word = token_index + 1
+
+                if verbose:
+                    word_text = self.text[start_char_pos_word: end_char_pos_word]
+                    print("\t\tWord #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {})".format(
+                        len(self.words), word_text.encode("utf-8"), start_char_pos_word, end_char_pos_word,
+                        start_token_index_word, end_token_index_word))
+
+                # append to word list
+                self.words.append(Word(start_char_pos=start_char_pos_word, end_char_pos=end_char_pos_word,
+                                       start_token_index=start_token_index_word, end_token_index=end_token_index_word))
+
+                # update char position to the end of current word
+                char_pos = end_char_pos_word
+
+            # append sentence to sentence list
+            self.sentences.append(Sentence(start_char_pos=start_char_pos_sent, end_char_pos=end_char_pos_sent,
+                                           start_token_index=start_token_index_sent, end_token_index=len(self.tokens),
+                                           start_word_index=start_word_index_sent, end_word_index=len(self.words)))
+
+            # update char position to the end of current sentence
+            char_pos = end_char_pos_sent
+
+        # append line to the list
+        self.lines.append(Line(start_char_pos=start_char_pos_line, end_char_pos=end_char_pos_line,
+                               start_sent_index=start_sent_index_line, end_sent_index=len(self.sentences)))
+
     def display_document(self):
         ann_i = 0
         for line_i in range(len(self.lines)):
@@ -497,7 +696,12 @@ def main(args):
     from .nlp_process import NLPProcess
 
     file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
-    file_conll_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
+    if args.ann_format == "conll":
+        file_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
+    elif args.ann_format == "standoff":
+        file_ann = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".ann")
+    else:
+        assert False, "Expected ann_format: a) conll,  b) standoff. Received: {}".format(args.ann_format)
 
     obj_nlp_process = NLPProcess(model=args.model)
     obj_nlp_process.load_nlp_model(verbose=True)
@@ -506,14 +710,18 @@ def main(args):
     document_obj = Document(doc_id=int(args.protocol_id), nlp_process_obj=obj_nlp_process)
     print("Document id: {}".format(document_obj.id))
     document_obj.parse_document(document_file=file_document)
-    document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann, verbose=args.verbose)
-    document_obj.display_document()
+    if args.ann_format == "conll":
+        document_obj.parse_conll_annotation(conll_ann_file=file_ann, verbose=args.verbose)
+        document_obj.display_document()
+    else:
+        document_obj.parse_standoff_annotation(ann_file=file_ann, verbose=args.verbose)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol_id", action="store", dest="protocol_id")
     parser.add_argument("--data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="data_dir")
     parser.add_argument("--model", action="store", default="en_core_web_sm", dest="model")
+    parser.add_argument("--ann_format", action="store", default="conll", dest="ann_format", help="Either conll or standoff")  #noqa
     parser.add_argument("--verbose", action="store_true", default=False, dest="verbose")
 
     args = parser.parse_args()
