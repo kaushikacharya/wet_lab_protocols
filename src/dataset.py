@@ -23,6 +23,9 @@ Word Tokenizers
 
     Mapping of "Word" to "Token" class are done based on the text span.
 
+Execution command
+-----------------
+    python -m src.dataset --ann_format standoff --protocol_id 101 --verbose > ./output/protocol/101_standoff.txt
 """
 
 
@@ -124,6 +127,7 @@ class Document:
         # Example: 37°C - This word is represented by 3 tokens in spaCy: 37, °, C
 
         self.entity_annotations = []
+        self.entity_ann_index = None  # Used for mapping entity annotations to the spanned words
 
         self.nlp_process_obj = nlp_process_obj
 
@@ -199,6 +203,12 @@ class Document:
             # Now sort ann_tuple_arr wrt start character offset
             ann_tuple_arr = sorted(ann_tuple_arr, key=lambda x: x[2][0])
 
+            for ann_tuple in ann_tuple_arr:
+                # assumption: contiguous text span for the annotation
+                entity_ann = EntityAnnotation(entity_id=ann_tuple[0], entity_type=ann_tuple[1],
+                                              start_char_pos=ann_tuple[2][0], end_char_pos=ann_tuple[2][-1])
+                self.entity_annotations.append(entity_ann)
+
             if verbose:
                 print("{}".format([(x[0], x[2]) for x in ann_tuple_arr]))
 
@@ -215,6 +225,7 @@ class Document:
                 print(self.text[char_pos:])
 
         # iterate over the protocol steps (represented by line of text)
+        self.entity_ann_index = 0
         char_pos = 0
         for m in re.finditer(r'\n+', self.text):
             self.parse_protocol_step_standoff(start_char_pos_line=char_pos, end_char_pos_line=m.start(), verbose=verbose)
@@ -533,6 +544,9 @@ class Document:
             start_word_index_sent = len(self.words)
             token_index = start_token_index_sent
 
+            if verbose:
+                print("")
+
             for word in word_tokens:
                 if word == "``" or word == "''":
                     # case: Double quotes changed by Penn Treebank Tokenizer
@@ -566,15 +580,43 @@ class Document:
 
                 end_token_index_word = token_index + 1
 
+                # ----- Map entity annotation with the current word (if applicable)
+                ner_tag = "O"
+                if len(self.entity_annotations) > 0:
+                    # First check if we need to increment entity_ann_index to the next entity(if available)
+                    if start_char_pos_word >= self.entity_annotations[self.entity_ann_index].end_char_pos:
+                        # case: current word is ahead of entity(referred by entity_ann_index)
+                        #       Hence increment to the next entity(if available)
+                        if self.entity_ann_index < (len(self.entity_annotations) - 1):
+                            self.entity_ann_index += 1
+
+                    if self.entity_annotations[self.entity_ann_index].start_char_pos >= end_char_pos_word:
+                        # case: entity referred by entity_ann_index is ahead of current word.
+                        #       Hence current word doesn't map to the entity
+                        pass
+                    elif start_char_pos_word < self.entity_annotations[self.entity_ann_index].end_char_pos:
+                        # case: entity referred by entity_ann_index includes current word
+                        if self.entity_annotations[self.entity_ann_index].start_word_index is None:
+                            # current word is the first word of the entity
+                            self.entity_annotations[self.entity_ann_index].start_word_index = len(self.words)
+                            ner_tag = "B-" + self.entity_annotations[self.entity_ann_index].type
+                        else:
+                            ner_tag = "I-" + self.entity_annotations[self.entity_ann_index].type
+
+                        # update the end_word_index of the entity.
+                        # If next word(s) also belongs to this entity, then it will be updated again in the next iteration of the words
+                        self.entity_annotations[self.entity_ann_index].end_word_index = len(self.words)+1
+
                 if verbose:
                     word_text = self.text[start_char_pos_word: end_char_pos_word]
-                    print("\t\tWord #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {})".format(
+                    print("\t\tWord #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {}) :: NER label: {}".format(
                         len(self.words), word_text.encode("utf-8"), start_char_pos_word, end_char_pos_word,
-                        start_token_index_word, end_token_index_word))
+                        start_token_index_word, end_token_index_word, ner_tag))
 
                 # append to word list
                 self.words.append(Word(start_char_pos=start_char_pos_word, end_char_pos=end_char_pos_word,
-                                       start_token_index=start_token_index_word, end_token_index=end_token_index_word))
+                                       start_token_index=start_token_index_word, end_token_index=end_token_index_word,
+                                       named_entity_label=ner_tag))
 
                 # update char position to the end of current word
                 char_pos = end_char_pos_word

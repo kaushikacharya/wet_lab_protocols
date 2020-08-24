@@ -1,5 +1,15 @@
 #!/usr/bin/env python
 
+"""
+Approach
+--------
+    CRF
+
+Execution command
+-----------------
+    python -m src.crf --ann_format standoff
+"""
+
 import argparse
 import glob
 import os
@@ -22,7 +32,7 @@ class NER:
         self.nlp_process_obj.load_nlp_model(verbose=verbose)
         self.nlp_process_obj.build_sentencizer(verbose=verbose)
 
-    def process_collection(self, data_dir):
+    def process_collection(self, data_dir, ann_format="conll"):
         X = []
         y = []
 
@@ -34,20 +44,29 @@ class NER:
             print("protocol_id: {}".format(protocol_id))
 
             file_document = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".txt")
-            file_conll_ann = os.path.join(data_dir, "Conll_Format/protocol_" + protocol_id + "_conll.txt")
+
+            if ann_format == "conll":
+                file_ann = os.path.join(data_dir, "Conll_Format/protocol_" + protocol_id + "_conll.txt")
+            elif ann_format == "standoff":
+                file_ann = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".ann")
+            else:
+                assert False, "Expected ann_format: a) conll,  b) standoff. Received: {}".format(ann_format)
 
             if not os.path.exists(file_document):
                 print("{} not available".format(file_document))
                 continue
 
-            if not os.path.exists(file_conll_ann):
-                print("{} not available".format(file_conll_ann))
+            if not os.path.exists(file_ann):
+                print("{} not available".format(file_ann))
                 continue
 
             try:
                 document_obj = Document(doc_id=int(protocol_id), nlp_process_obj=self.nlp_process_obj)
                 document_obj.parse_document(document_file=file_document)
-                document_obj.parse_conll_annotation(conll_ann_file=file_conll_ann)
+                if ann_format == "conll":
+                    document_obj.parse_conll_annotation(conll_ann_file=file_ann)
+                elif ann_format == "standoff":
+                    document_obj.parse_standoff_annotation(ann_file=file_ann)
 
                 feature_obj = Feature(doc_obj=document_obj)
                 doc_features = feature_obj.extract_document_features(verbose=False)
@@ -102,10 +121,10 @@ class NER:
 def main(args):
     ner_obj = NER()
 
-    train_X, train_y = ner_obj.process_collection(data_dir=args.train_data_dir)
+    train_X, train_y = ner_obj.process_collection(data_dir=args.train_data_dir, ann_format=args.ann_format)
     ner_obj.train(X_train=train_X, y_train=train_y)
 
-    dev_X, dev_y = ner_obj.process_collection(data_dir=args.dev_data_dir)
+    dev_X, dev_y = ner_obj.process_collection(data_dir=args.dev_data_dir, ann_format=args.ann_format)
     ner_obj.evaluate(X_test=dev_X, y_test=dev_y)
 
 
@@ -114,6 +133,8 @@ if __name__ == "__main__":
     parser.add_argument("--train_data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="train_data_dir")
     parser.add_argument("--dev_data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/dev_data/",
                         dest="dev_data_dir")
+    parser.add_argument("--ann_format", action="store", default="conll", dest="ann_format",
+                        help="Either conll or standoff")
 
     args = parser.parse_args()
     main(args=args)
