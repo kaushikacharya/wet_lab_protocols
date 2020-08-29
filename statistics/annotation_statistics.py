@@ -10,9 +10,10 @@ import io
 import os
 import pandas as pd
 import re
+import traceback
 
-from ..src.dataset import *
-from ..src.nlp_process import *
+from src.dataset import *
+from src.nlp_process import *
 
 
 class AnnotationStatistics:
@@ -31,7 +32,7 @@ class AnnotationStatistics:
         """Process protocols in the dataset"""
         # Iterate over each of the files in the folder (train, dev)
         for f in os.listdir(os.path.join(data_dir, "Conll_Format")):
-            print(f)
+            # print(f)
             m = re.search(r"\d+", f)
             if m is None:
                 print("file: {} not in expected format".format(f))
@@ -50,7 +51,11 @@ class AnnotationStatistics:
                 continue
 
             # print("text file: {}, conll annotated file: {}".format(file_document, file_conll_ann))
-            self.process_protocol(doc_id=int(protocol_id), doc_file=file_document, conll_ann_file=file_conll_ann)
+            try:
+                self.process_protocol(doc_id=int(protocol_id), doc_file=file_document, conll_ann_file=file_conll_ann)
+            except:
+                print("Crashed in protocol_id: {}".format(protocol_id))
+                traceback.print_exc()
 
     def process_protocol(self, doc_id, doc_file, conll_ann_file):
         """Process a single protocol document"""
