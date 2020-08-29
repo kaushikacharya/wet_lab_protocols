@@ -1,13 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Approach
 --------
     CRF
 
-Execution command
------------------
-    python -m src.crf --ann_format standoff
+Execution command example
+-------------------------
+    python -u -m src.crf --ann_format standoff > ./output/results/crf_standoff.txt 2>&1
 """
 
 import argparse
@@ -17,9 +17,9 @@ import sklearn_crfsuite
 from sklearn_crfsuite import metrics
 import traceback
 
-from .dataset import *
-from .feature import *
-from .nlp_process import NLPProcess
+from src.dataset import *
+from src.feature import *
+from src.nlp_process import NLPProcess
 
 class NER:
     def __init__(self):
@@ -41,7 +41,7 @@ class NER:
             file_basename, _ = os.path.splitext(os.path.basename(f))
             protocol_id = file_basename[len("protocol_"):]
 
-            print("protocol_id: {}".format(protocol_id))
+            # print("protocol_id: {}".format(protocol_id))
 
             file_document = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".txt")
 
