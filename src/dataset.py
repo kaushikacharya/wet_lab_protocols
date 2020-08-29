@@ -23,18 +23,19 @@ Word Tokenizers
 
     Mapping of "Word" to "Token" class are done based on the text span.
 
-Execution command
------------------
-    python -m src.dataset --ann_format standoff --protocol_id 101 --verbose > ./output/protocol/101_standoff.txt
+Execution command example
+-------------------------
+    python -u -m src.dataset --ann_format standoff --protocol_id 101 --verbose > ./output/protocol/101_standoff.txt
 """
 
 
 import argparse
-import codecs
+# import codecs
+import io
 import nltk
 import re
 
-from .annotation import *
+from src.annotation import *
 
 
 class Line:
@@ -145,7 +146,7 @@ class Document:
 
     def parse_conll_annotation(self, conll_ann_file, verbose=False):
         assert self.text is not None, "parse_document() is a pre-requisite"
-        with codecs.open(filename=conll_ann_file, mode="r", encoding="utf-8") as fd:
+        with io.open(file=conll_ann_file, mode="r", encoding="utf-8") as fd:
             current_line_tags = []  # list of (word, NER tag) tuple
             char_pos = 0
             for line in fd:
@@ -177,7 +178,7 @@ class Document:
         """
         assert self.text is not None, "parse_document() is a pre-requisite"
         # read the standoff annotations for the protocol
-        with codecs.open(filename=ann_file, mode="r", encoding="utf-8") as fd:
+        with io.open(file=ann_file, mode="r", encoding="utf-8") as fd:
             ann_tuple_arr = []
             for line in fd:
                 line = line.strip()
@@ -189,8 +190,9 @@ class Document:
                 if line[0] != "T":
                     continue
 
+                # split the line using tab delimiter
                 tokens = line.split("\t")
-                assert len(tokens) == 3, "Expected three tab separated tokens for line: {}".format(line)
+                assert len(tokens) > 2, "Expected format: <Entity ID><TAB><Entity Type><Space><Begin char pos><Space><End char pos><TAB><Text> : {}".format(line)
 
                 entity_id = tokens[0]
                 char_index = tokens[1].find(" ")
