@@ -1,18 +1,18 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Feature extraction for a Document
 
 Reference:
 ---------
-https://sklearn-crfsuite.readthedocs.io/en/latest/tutorial.html
+    https://sklearn-crfsuite.readthedocs.io/en/latest/tutorial.html
 """
 
 import argparse
 import spacy
 from spacy import displacy
 
-from .dataset import *
+from src.dataset import *
 
 
 class Feature:
@@ -77,14 +77,24 @@ class Feature:
             word_features["bias"] = 1.0
             word_text = self.doc_obj.text[word_obj.start_char_pos: word_obj.end_char_pos]
             word_features["word_lower"] = word_text.lower()
+            word_features["is_caps"] = word_text.isupper()
 
             if word_index == start_word_index:
                 word_features["BOS"] = True
             else:
                 word_features["prev_word_lower"] = sent_features[-1]["word_lower"]
 
+                # populate next_word_lower feature for the previous word
+                sent_features[-1]["next_word_lower"] = word_text.lower()
+
             if word_obj.end_token_index - word_obj.start_token_index > 1:
                 word_features["multi_token"] = True
+            else:
+                head_token_index = self.doc_obj.tokens[word_obj.start_token_index].head_index
+                if word_obj.start_token_index == head_token_index:
+                    word_features["is_root_dependency_parse"] = True
+                else:
+                    word_features["dependency_head_POS"] = self.doc_obj.tokens[head_token_index].part_of_speech
 
             # TODO In case of multi-tokens, select syntactic features from the prime token
             word_features["POS"] = self.doc_obj.tokens[word_obj.start_token_index].part_of_speech
