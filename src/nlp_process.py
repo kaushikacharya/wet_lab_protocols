@@ -14,7 +14,6 @@ https://spacy.io/usage/linguistic-features#sbd
 """
 
 import argparse
-import os
 import spacy
 from spacy import displacy
 from spacy.lang.en import English
@@ -61,6 +60,8 @@ class NLPProcess:
         return doc
 
 def main(args, verbose=True):
+    import os
+
     file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
 
     obj_nlp_process = NLPProcess()

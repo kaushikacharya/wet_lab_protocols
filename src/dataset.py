@@ -216,15 +216,6 @@ class Document:
 
 
         # Now populate words, lines, sentences and map words to entity annotations
-        if False:
-            char_pos = 0
-            for m in re.finditer(r'\n+', self.text):
-                print(self.text[char_pos:m.start()])
-                char_pos = m.end()
-
-            # Handling the portion of the text(if available) after the final newline
-            if char_pos < len(self.text):
-                print(self.text[char_pos:])
 
         # iterate over the protocol steps (represented by line of text)
         self.entity_ann_index = 0
@@ -737,7 +728,7 @@ class Document:
 
 def main(args):
     import os
-    from .nlp_process import NLPProcess
+    from src.nlp_process import NLPProcess
 
     file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
     if args.ann_format == "conll":

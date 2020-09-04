@@ -107,7 +107,7 @@ class Feature:
 
 def main(args):
     import os
-    from .nlp_process import NLPProcess
+    from src.nlp_process import NLPProcess
 
     file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
     file_conll_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
