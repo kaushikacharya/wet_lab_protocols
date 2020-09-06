@@ -11,7 +11,9 @@ Execution command example
 """
 
 import argparse
+from csv import writer
 import glob
+import io
 import joblib
 import os
 import pandas as pd
@@ -212,11 +214,13 @@ class NER:
             document_obj.parse_conll_annotation(conll_ann_file=file_ann)
         elif ann_format == "standoff":
             document_obj.parse_standoff_annotation(ann_file=file_ann)
+        else:
+            assert False, "ERROR: Unexpected ann_format: {}".format(ann_format)
 
         feature_obj = Feature(doc_obj=document_obj)
         doc_features = feature_obj.extract_document_features(verbose=False)
 
-        assert self.crf is not None, "pre-requisite: train crf"
+        assert self.crf is not None, "pre-requisite: Either train crf or load trained CRF model"
         y_pred_doc = self.crf.predict(X=doc_features)
         assert len(y_pred_doc) == len(document_obj.sentences), "Mismatch in len(y_pred_doc): {} :: len(sentences): {}".format(
             len(y_pred_doc), len(document_obj.sentences))
@@ -274,6 +278,252 @@ class NER:
                 entity_text = document_obj.text[entity_ann.start_char_pos: entity_ann.end_char_pos]
                 fd.write("{}\t{} {} {}\t{}\n".format(entity_ann.id, entity_ann.type, entity_ann.start_char_pos, entity_ann.end_char_pos, entity_text))
 
+    def compare_truth_predict_document(self, protocol_id, data_dir, ann_format="standoff"):
+        """Compare entities: ground truth vs predicted.
+        """
+        file_document = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".txt")
+        file_ann = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".ann")
+
+        if not os.path.exists(file_document):
+            print("{} not available".format(file_document))
+            return None
+
+        if not os.path.exists(file_ann):
+            print("{} not available".format(file_ann))
+            return None
+
+        document_obj = Document(doc_id=int(protocol_id), nlp_process_obj=self.nlp_process_obj)
+        document_obj.parse_document(document_file=file_document)
+        if ann_format == "conll":
+            document_obj.parse_conll_annotation(conll_ann_file=file_ann)
+        elif ann_format == "standoff":
+            document_obj.parse_standoff_annotation(ann_file=file_ann)
+        else:
+            assert False, "ERROR: Unexpected ann_format: {}".format(ann_format)
+
+        feature_obj = Feature(doc_obj=document_obj)
+        doc_features = feature_obj.extract_document_features(verbose=False)
+
+        assert self.crf is not None, "pre-requisite: Either train crf or load trained CRF model"
+        y_pred_doc = self.crf.predict(X=doc_features)
+        assert len(y_pred_doc) == len(document_obj.sentences), "Mismatch in len(y_pred_doc): {} :: len(sentences): {}".format(
+            len(y_pred_doc), len(document_obj.sentences))
+
+        csv_output = io.StringIO()
+        csv_writer = writer(csv_output)
+
+        # iterate over each of the sentences
+        for sent_i in range(len(document_obj.sentences)):
+            start_word_index_sent = document_obj.sentences[sent_i].start_word_index
+            n_words_sent = document_obj.sentences[sent_i].end_word_index - start_word_index_sent
+            y_pred_sent = y_pred_doc[sent_i]
+            assert len(y_pred_doc[sent_i]) == n_words_sent,\
+                "Mismatch in word counts for sentence #{} :: n_words_sent: {} :: y_pred_sent: {}".format(
+                    sent_i, n_words_sent, len(y_pred_sent))
+
+            # Build ground truth entities
+            entity_annotations_truth = []
+            for word_i in range(n_words_sent):
+                word_index = start_word_index_sent + word_i  # word index in document
+
+                ner_tag = document_obj.words[word_index].named_entity_label
+
+                if ner_tag == "O":
+                    continue
+
+                ner_tag_tokens = ner_tag.split("-")
+                assert len(ner_tag_tokens) > 1, "NER tag not in BIO format :: Named Entity: {}".format(ner_tag)
+                if ner_tag_tokens[0] == "B":
+                    # start of next named entity
+                    entity_type = ner_tag[2:]
+                    start_word_index_ent = word_index
+                    end_word_index_ent = start_word_index_ent + 1
+                    start_char_pos_ent = document_obj.words[start_word_index_ent].start_char_pos
+                    end_char_pos_ent = document_obj.words[end_word_index_ent - 1].end_char_pos
+
+                    entity_ann = EntityAnnotation(start_char_pos=start_char_pos_ent, end_char_pos=end_char_pos_ent,
+                                                  start_word_index=start_word_index_ent,
+                                                  end_word_index=end_word_index_ent, entity_type=entity_type)
+                    entity_annotations_truth.append(entity_ann)
+                elif ner_tag_tokens[0] == "I":
+                    # continuation of prev named entity
+                    # Set end_word_index of entity to next word. If entity continues to next word also, then we will update this field again.
+                    end_word_index_ent = word_index + 1
+                    entity_annotations_truth[-1].end_word_index = end_word_index_ent
+                    entity_annotations_truth[-1].end_char_pos = document_obj.words[end_word_index_ent - 1].end_char_pos
+                else:
+                    assert False, "ERROR :: ner_tag expected either B-<Entity Type> or I-<Entity Type>"
+
+            # Build predicted entities
+            entity_annotations_pred = []
+            for word_i in range(n_words_sent):
+                word_index = start_word_index_sent + word_i  # word index in document
+
+                ner_tag = y_pred_sent[word_i]
+
+                if ner_tag == "O":
+                    continue
+
+                ner_tag_tokens = ner_tag.split("-")
+                assert len(ner_tag_tokens) > 1, "NER tag not in BIO format :: Named Entity: {}".format(ner_tag)
+                if ner_tag_tokens[0] == "B":
+                    # start of next named entity
+                    entity_type = ner_tag[2:]
+                    start_word_index_ent = word_index
+                    end_word_index_ent = start_word_index_ent + 1
+                    start_char_pos_ent = document_obj.words[start_word_index_ent].start_char_pos
+                    end_char_pos_ent = document_obj.words[end_word_index_ent - 1].end_char_pos
+
+                    entity_ann = EntityAnnotation(start_char_pos=start_char_pos_ent, end_char_pos=end_char_pos_ent,
+                                                  start_word_index=start_word_index_ent,
+                                                  end_word_index=end_word_index_ent, entity_type=entity_type)
+                    entity_annotations_pred.append(entity_ann)
+                elif ner_tag_tokens[0] == "I":
+                    # continuation of prev named entity
+                    # Set end_word_index of entity to next word. If entity continues to next word also, then we will update this field again.
+                    end_word_index_ent = word_index + 1
+                    entity_annotations_pred[-1].end_word_index = end_word_index_ent
+                    entity_annotations_pred[-1].end_char_pos = document_obj.words[end_word_index_ent - 1].end_char_pos
+                else:
+                    assert False, "ERROR :: ner_tag expected either B-<Entity Type> or I-<Entity Type>"
+
+            # Now compare ground truth vs predicted entities
+            ann_truth_i = 0
+            ann_pred_i = 0
+
+            # For every truth entity where prediction is incorrect, note the predicted entity(ies) in that text span.
+            # And vice-versa.
+            while (ann_truth_i < len(entity_annotations_truth)) and (ann_pred_i < len(entity_annotations_pred)):
+                correct_predict = False
+                if entity_annotations_truth[ann_truth_i].start_word_index < entity_annotations_pred[ann_pred_i].start_word_index:
+                    # Collect predicted entity(ies) formed in the same text span as current truth entity
+                    entity_pred_arr = []
+                    for word_index in range(entity_annotations_truth[ann_truth_i].start_word_index,
+                                            entity_annotations_truth[ann_truth_i].end_word_index):
+                        word_i = word_index - start_word_index_sent
+                        ner_tag_pred = y_pred_sent[word_i]
+
+                        if ner_tag_pred == "O":
+                            entity_type_pred = ner_tag_pred
+                        else:
+                            entity_type_pred = ner_tag_pred[2:]
+
+                        # As we are collecting predicted entities formed in the same text space as the current truth entity,
+                        # we only consider when entity changes.
+                        if len(entity_pred_arr) == 0:
+                            entity_pred_arr.append(entity_type_pred)
+                        elif entity_pred_arr[-1] != entity_type_pred:
+                            entity_pred_arr.append(entity_type_pred)
+
+                    entity_truth_str = entity_annotations_truth[ann_truth_i].type
+                    entity_pred_str = "_".join(entity_pred_arr)
+
+                    entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
+                    csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+
+                    ann_truth_i += 1
+
+                elif entity_annotations_pred[ann_pred_i].start_word_index < entity_annotations_truth[ann_truth_i].start_word_index:
+                    # Collect truth entity(ies) formed in the same text span as current predicted entity
+                    entity_truth_arr = []
+                    for word_index in range(entity_annotations_pred[ann_pred_i].start_word_index,
+                                            entity_annotations_pred[ann_pred_i].end_word_index):
+                        ner_tag_truth = document_obj.words[word_index].named_entity_label
+                        entity_type_truth = ner_tag_truth if ner_tag_truth == "O" else ner_tag_truth[2:]
+
+                        if len(entity_truth_arr) == 0:
+                            entity_truth_arr.append(entity_type_truth)
+                        elif entity_truth_arr[-1] != entity_type_truth:
+                            entity_truth_arr.append(entity_type_truth)
+
+                    entity_truth_str = "_".join(entity_truth_arr)
+                    entity_pred_str = entity_annotations_pred[ann_pred_i].type
+
+                    entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
+                    csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+
+                    ann_pred_i += 1
+                else:
+                    # Both the current truth and predicted entities start at same character offset
+                    entity_truth_str = entity_annotations_truth[ann_truth_i].type
+                    entity_pred_str = entity_annotations_pred[ann_pred_i].type
+
+                    if entity_annotations_truth[ann_truth_i].end_word_index < entity_annotations_pred[ann_pred_i].end_word_index:
+                        entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
+                        csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        ann_truth_i += 1
+                    elif entity_annotations_pred[ann_pred_i].end_word_index < entity_annotations_truth[ann_truth_i].end_word_index:
+                        entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
+                        csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        ann_pred_i += 1
+                    else:
+                        # Both current truth and predicted entity have same text span
+                        if entity_annotations_truth[ann_truth_i].type == entity_annotations_pred[ann_pred_i].type:
+                            correct_predict = True
+                        entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
+                        csv_writer.writerow([protocol_id, sent_i, True, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        ann_truth_i += 1
+                        ann_pred_i += 1
+
+            while ann_truth_i < len(entity_annotations_truth):
+                if (len(entity_annotations_pred) == 0) or \
+                        (entity_annotations_truth[ann_truth_i].start_word_index >= entity_annotations_pred[-1].end_word_index):
+                    entity_truth_str = entity_annotations_truth[ann_truth_i].type
+                    entity_pred_str = "O"
+                else:
+                    entity_pred_arr = []
+                    for word_index in range(entity_annotations_truth[ann_truth_i].start_word_index,
+                                            entity_annotations_truth[ann_truth_i].end_word_index):
+                        word_i = word_index - start_word_index_sent
+                        ner_tag_pred = y_pred_sent[word_i]
+
+                        if ner_tag_pred == "O":
+                            entity_type_pred = ner_tag_pred
+                        else:
+                            entity_type_pred = ner_tag_pred[2:]
+
+                        # As we are collecting predicted entities formed in the same text space as the current truth entity,
+                        # we only consider when entity changes.
+                        if len(entity_pred_arr) == 0:
+                            entity_pred_arr.append(entity_type_pred)
+                        elif entity_pred_arr[-1] != entity_type_pred:
+                            entity_pred_arr.append(entity_type_pred)
+
+                    entity_truth_str = entity_annotations_truth[ann_truth_i].type
+                    entity_pred_str = "_".join(entity_pred_arr)
+
+                entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
+                csv_writer.writerow([protocol_id, sent_i, True, False, False, entity_truth_str, entity_pred_str, entity_text])
+                ann_truth_i += 1
+
+            while ann_pred_i < len(entity_annotations_pred):
+                if (len(entity_annotations_truth) == 0) or (entity_annotations_pred[ann_pred_i].start_word_index >= entity_annotations_truth[-1].end_word_index):
+                    entity_truth_str = "O"
+                    entity_pred_str = entity_annotations_pred[ann_pred_i].type
+                else:
+                    entity_truth_arr = []
+                    for word_index in range(entity_annotations_pred[ann_pred_i].start_word_index,
+                                            entity_annotations_pred[ann_pred_i].end_word_index):
+                        ner_tag_truth = document_obj.words[word_index].named_entity_label
+                        entity_type_truth = ner_tag_truth if ner_tag_truth == "O" else ner_tag_truth[2:]
+
+                        if len(entity_truth_arr) == 0:
+                            entity_truth_arr.append(entity_type_truth)
+                        elif entity_truth_arr[-1] != entity_type_truth:
+                            entity_truth_arr.append(entity_type_truth)
+
+                    entity_truth_str = "_".join(entity_truth_arr)
+                    entity_pred_str = entity_annotations_pred[ann_pred_i].type
+
+                entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
+                csv_writer.writerow([protocol_id, sent_i, False, True, False, entity_truth_str, entity_pred_str, entity_text])
+                ann_pred_i += 1
+
+        csv_output.seek(0)
+        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred", "entity_truth", "entity_pred", "text"]
+        df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
+
+        return df
 
 def main(args):
     start_time = time.time()
@@ -309,6 +559,14 @@ def main(args):
         output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict", os.path.basename(os.path.dirname(args.test_data_dir)))
         ner_obj.predict_document(protocol_id=args.predict_protocol_id, input_data_dir=args.test_data_dir, output_data_dir=output_data_dir)
 
+    if args.debug_protocol_id is not None:
+        df = ner_obj.compare_truth_predict_document(protocol_id=args.debug_protocol_id, data_dir=args.train_data_dir)
+        if df is not None:
+            output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", args.debug_protocol_id)
+            if not os.path.exists(output_data_dir):
+                os.makedirs(output_data_dir)
+            output_filename = os.path.join(output_data_dir, args.debug_protocol_id+".csv")
+            df.to_csv(path_or_buf=output_filename, index=False)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -325,6 +583,8 @@ if __name__ == "__main__":
                         help="Predict NER on test_data_dir protocols")
     parser.add_argument("--predict_protocol_id", action="store", default=None, dest="predict_protocol_id",
                         help="Predict NER on a specific protocol of test_data_dir")
+    parser.add_argument("--debug_protocol_id", action="store", default=None, dest="debug_protocol_id",
+                        help="Compare truth vs predicted entities on a specific protocol of train_data_dir")
 
 
     args = parser.parse_args()
