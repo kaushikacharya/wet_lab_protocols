@@ -193,7 +193,7 @@ class NER:
             try:
                 self.predict_document(protocol_id=protocol_id, input_data_dir=input_data_dir, output_data_dir=output_data_dir, ann_format=ann_format)
             except:
-                print("Failed for protocol_id: {}".format(protocol_id))
+                print("[ERROR]: Failed for protocol_id: {}".format(protocol_id))
                 traceback.print_exc()
 
     def predict_document(self, protocol_id, input_data_dir, output_data_dir, ann_format="standoff"):
@@ -278,19 +278,47 @@ class NER:
                 entity_text = document_obj.text[entity_ann.start_char_pos: entity_ann.end_char_pos]
                 fd.write("{}\t{} {} {}\t{}\n".format(entity_ann.id, entity_ann.type, entity_ann.start_char_pos, entity_ann.end_char_pos, entity_text))
 
-    def compare_truth_predict_document(self, protocol_id, data_dir, ann_format="standoff"):
+    def compare_truth_predict_collection(self, data_dir, ann_format="standoff"):
+
+        csv_output = io.StringIO()
+        csv_writer = writer(csv_output)
+
+        # Iterate over each of the protocols
+        for f in glob.glob(os.path.join(data_dir, "Standoff_Format", "*.txt")):
+            # extract the protocol_id
+            file_basename, _ = os.path.splitext(os.path.basename(f))
+            protocol_id = file_basename[len("protocol_"):]
+
+            try:
+                df_doc = self.compare_truth_predict_document(protocol_id=protocol_id, data_dir=data_dir, ann_format=ann_format)
+
+                for index, row in df_doc.iterrows():
+                    csv_writer.writerow(row.values.tolist())
+            except:
+                print("\n[ERROR]: Failed for protocol_id: {}".format(protocol_id))
+                traceback.print_exc()
+
+        csv_output.seek(0)
+        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred",
+                      "entity_truth", "entity_pred", "text"]
+        df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
+
+        return df
+
+    def compare_truth_predict_document(self, protocol_id, data_dir, ann_format="standoff", verbose=False):
         """Compare entities: ground truth vs predicted.
+            For each truth entity, find out the predicted entity(ies) in that same text span.
+            And vice-versa, for each predicted entity find out the truth entity(ies) in the same text span.
+            In other words, collect true/false positive/negative entities.
+            N.B. The corresponding other entity(ies) may extend beyond the text span of the entity against
+                which we are comparing.
         """
+        assert isinstance(protocol_id, str), "expected type(protocol_id): str but received: {}".format(type(protocol_id))
         file_document = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".txt")
         file_ann = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".ann")
 
-        if not os.path.exists(file_document):
-            print("{} not available".format(file_document))
-            return None
-
-        if not os.path.exists(file_ann):
-            print("{} not available".format(file_ann))
-            return None
+        assert os.path.exists(file_document), "{} not available".format(file_document)
+        assert os.path.exists(file_ann), "{} not available".format(file_ann)
 
         document_obj = Document(doc_id=int(protocol_id), nlp_process_obj=self.nlp_process_obj)
         document_obj.parse_document(document_file=file_document)
@@ -312,8 +340,16 @@ class NER:
         csv_output = io.StringIO()
         csv_writer = writer(csv_output)
 
+        # TODO Handle cases which seems that entity is formed over words from multiple sentences. This is due to incorrect sentence segmentation.
+
         # iterate over each of the sentences
         for sent_i in range(len(document_obj.sentences)):
+            if verbose:
+                start_char_pos_sent = document_obj.sentences[sent_i].start_char_pos
+                end_char_pos_sent = document_obj.sentences[sent_i].end_char_pos
+                sent_text = document_obj.text[start_char_pos_sent: end_char_pos_sent]
+                print("Sentence #{} :: {}".format(sent_i, sent_text))
+
             start_word_index_sent = document_obj.sentences[sent_i].start_word_index
             n_words_sent = document_obj.sentences[sent_i].end_word_index - start_word_index_sent
             y_pred_sent = y_pred_doc[sent_i]
@@ -559,8 +595,16 @@ def main(args):
         output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict", os.path.basename(os.path.dirname(args.test_data_dir)))
         ner_obj.predict_document(protocol_id=args.predict_protocol_id, input_data_dir=args.test_data_dir, output_data_dir=output_data_dir)
 
+    if args.debug_collection:
+        df = ner_obj.compare_truth_predict_collection(data_dir=args.train_data_dir)
+        output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", args.train_data_dir)
+        if not os.path.exists(output_data_dir):
+            os.makedirs(output_data_dir)
+        output_filename = os.path.join(output_data_dir, os.path.basename(os.path.dirname(args.train_data_dir)) + "_confusers.csv")
+        df.to_csv(path_or_buf=output_filename, index=False)
+
     if args.debug_protocol_id is not None:
-        df = ner_obj.compare_truth_predict_document(protocol_id=args.debug_protocol_id, data_dir=args.train_data_dir)
+        df = ner_obj.compare_truth_predict_document(protocol_id=args.debug_protocol_id, data_dir=args.train_data_dir, verbose=args.verbose)
         if df is not None:
             output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", args.debug_protocol_id)
             if not os.path.exists(output_data_dir):
@@ -583,8 +627,11 @@ if __name__ == "__main__":
                         help="Predict NER on test_data_dir protocols")
     parser.add_argument("--predict_protocol_id", action="store", default=None, dest="predict_protocol_id",
                         help="Predict NER on a specific protocol of test_data_dir")
+    parser.add_argument("--debug_collection", action="store_true", default=False, dest="debug_collection",
+                        help="Compare truth vs predicted entities on train_data_dir protocols")
     parser.add_argument("--debug_protocol_id", action="store", default=None, dest="debug_protocol_id",
                         help="Compare truth vs predicted entities on a specific protocol of train_data_dir")
+    parser.add_argument("--verbose", action="store_true", default=False, dest="verbose")
 
 
     args = parser.parse_args()
