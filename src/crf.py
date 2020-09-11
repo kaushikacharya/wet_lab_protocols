@@ -300,7 +300,7 @@ class NER:
 
         csv_output.seek(0)
         df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred",
-                      "entity_truth", "entity_pred", "text"]
+                      "entity_truth", "entity_pred", "text", "sentence"]
         df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
 
         return df
@@ -349,6 +349,10 @@ class NER:
                 end_char_pos_sent = document_obj.sentences[sent_i].end_char_pos
                 sent_text = document_obj.text[start_char_pos_sent: end_char_pos_sent]
                 print("Sentence #{} :: {}".format(sent_i, sent_text))
+
+            start_char_pos_sent = document_obj.sentences[sent_i].start_char_pos
+            end_char_pos_sent = document_obj.sentences[sent_i].end_char_pos
+            sent_text = document_obj.text[start_char_pos_sent: end_char_pos_sent]
 
             start_word_index_sent = document_obj.sentences[sent_i].start_word_index
             n_words_sent = document_obj.sentences[sent_i].end_word_index - start_word_index_sent
@@ -434,6 +438,7 @@ class NER:
                 if entity_annotations_truth[ann_truth_i].start_word_index < entity_annotations_pred[ann_pred_i].start_word_index:
                     # Collect predicted entity(ies) formed in the same text span as current truth entity
                     entity_pred_arr = []
+                    # ?? Cases where truth entity spans over multiple sentences, extraction of corresponding predicted entity would fail.
                     for word_index in range(entity_annotations_truth[ann_truth_i].start_word_index,
                                             entity_annotations_truth[ann_truth_i].end_word_index):
                         word_i = word_index - start_word_index_sent
@@ -455,7 +460,7 @@ class NER:
                     entity_pred_str = "_".join(entity_pred_arr)
 
                     entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                    csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                    csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
 
                     ann_truth_i += 1
 
@@ -476,7 +481,7 @@ class NER:
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
 
                     entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                    csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                    csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
 
                     ann_pred_i += 1
                 else:
@@ -486,18 +491,18 @@ class NER:
 
                     if entity_annotations_truth[ann_truth_i].end_word_index < entity_annotations_pred[ann_pred_i].end_word_index:
                         entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
                         ann_truth_i += 1
                     elif entity_annotations_pred[ann_pred_i].end_word_index < entity_annotations_truth[ann_truth_i].end_word_index:
                         entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
                         ann_pred_i += 1
                     else:
                         # Both current truth and predicted entity have same text span
                         if entity_annotations_truth[ann_truth_i].type == entity_annotations_pred[ann_pred_i].type:
                             correct_predict = True
                         entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, True, True, correct_predict, entity_truth_str, entity_pred_str, entity_text])
+                        csv_writer.writerow([protocol_id, sent_i, True, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
                         ann_truth_i += 1
                         ann_pred_i += 1
 
@@ -529,7 +534,7 @@ class NER:
                     entity_pred_str = "_".join(entity_pred_arr)
 
                 entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                csv_writer.writerow([protocol_id, sent_i, True, False, False, entity_truth_str, entity_pred_str, entity_text])
+                csv_writer.writerow([protocol_id, sent_i, True, False, False, entity_truth_str, entity_pred_str, entity_text, sent_text])
                 ann_truth_i += 1
 
             while ann_pred_i < len(entity_annotations_pred):
@@ -552,11 +557,11 @@ class NER:
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
 
                 entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                csv_writer.writerow([protocol_id, sent_i, False, True, False, entity_truth_str, entity_pred_str, entity_text])
+                csv_writer.writerow([protocol_id, sent_i, False, True, False, entity_truth_str, entity_pred_str, entity_text, sent_text])
                 ann_pred_i += 1
 
         csv_output.seek(0)
-        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred", "entity_truth", "entity_pred", "text"]
+        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred", "entity_truth", "entity_pred", "text", "sentence"]
         df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
 
         return df
