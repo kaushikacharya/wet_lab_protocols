@@ -300,7 +300,7 @@ class NER:
 
         csv_output.seek(0)
         df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred",
-                      "entity_truth", "entity_pred", "text", "sentence"]
+                      "entity_truth", "entity_pred", "text", "overlap_entity_truth", "overlap_entity_pred", "sentence"]
         df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
 
         return df
@@ -432,11 +432,18 @@ class NER:
             ann_pred_i = 0
 
             # For every truth entity where prediction is incorrect, note the predicted entity(ies) in that text span.
-            # And vice-versa.
+            # And similarly for every predicted entity.
+
+            # For an entity, its corresponding overlapping entities are collected in the following ways:
+            # a) Collect entity(ies) in the same text span using token level named entity label.
+            # b) Collect entity(ies) which overlap(partial or full) with the given entity.
             while (ann_truth_i < len(entity_annotations_truth)) and (ann_pred_i < len(entity_annotations_pred)):
                 correct_predict = False
                 if entity_annotations_truth[ann_truth_i].start_word_index < entity_annotations_pred[ann_pred_i].start_word_index:
-                    # Collect predicted entity(ies) formed in the same text span as current truth entity
+                    # Collect predicted entity(ies) corresponding to the current truth entity
+
+                    # First collect at the same text span as current truth entity.
+                    # Achieved using token level named entity label.
                     entity_pred_arr = []
                     # ?? Cases where truth entity spans over multiple sentences, extraction of corresponding predicted entity would fail.
                     for word_index in range(entity_annotations_truth[ann_truth_i].start_word_index,
@@ -447,6 +454,7 @@ class NER:
                         if ner_tag_pred == "O":
                             entity_type_pred = ner_tag_pred
                         else:
+                            # B-<Entity type>, I-<Entity type>
                             entity_type_pred = ner_tag_pred[2:]
 
                         # As we are collecting predicted entities formed in the same text space as the current truth entity,
@@ -459,13 +467,53 @@ class NER:
                     entity_truth_str = entity_annotations_truth[ann_truth_i].type
                     entity_pred_str = "_".join(entity_pred_arr)
 
+                    # Now collect predicted entity(ies) overlapping(partial or complete) current truth entity
+                    # Here we match at entity level, even if match is partial.
+                    overlap_entity_dict = dict()
+
+                    # Keep moving predicted entities forward till there's overlap with current truth entity
+                    ann_pred_j = ann_pred_i
+                    while (ann_pred_j < len(entity_annotations_pred)) and \
+                            (entity_annotations_pred[ann_pred_j].start_word_index < entity_annotations_truth[ann_truth_i].end_word_index):
+
+                        entity_type_pred = entity_annotations_pred[ann_pred_j].type
+                        entity_text_pred = document_obj.text[entity_annotations_pred[ann_pred_j].start_char_pos: entity_annotations_pred[ann_pred_j].end_char_pos]
+
+                        if entity_type_pred in overlap_entity_dict:
+                            if isinstance(overlap_entity_dict[entity_type_pred], str):
+                                overlap_entity_dict[entity_type_pred] = [overlap_entity_dict[entity_type_pred]]
+                            overlap_entity_dict[entity_type_pred].append(entity_text_pred)
+                        else:
+                            overlap_entity_dict[entity_type_pred] = entity_text_pred
+
+                        ann_pred_j += 1
+
+                    # Now keep moving predicted entities backward till there's overlap with current truth entity
+                    ann_pred_j = ann_pred_i - 1
+                    while (ann_pred_j >= 0) and (entity_annotations_pred[ann_pred_j].end_word_index > entity_annotations_truth[ann_truth_i].start_word_index):
+                        if entity_annotations_pred[ann_pred_j].start_word_index < entity_annotations_truth[ann_truth_i].end_word_index:
+                            entity_type_pred = entity_annotations_pred[ann_pred_j].type
+                            entity_text_pred = document_obj.text[entity_annotations_pred[ann_pred_j].start_char_pos:
+                            entity_annotations_pred[ann_pred_j].end_char_pos]
+
+                            if entity_type_pred in overlap_entity_dict:
+                                if isinstance(overlap_entity_dict[entity_type_pred], str):
+                                    overlap_entity_dict[entity_type_pred] = [overlap_entity_dict[entity_type_pred]]
+                                overlap_entity_dict[entity_type_pred].append(entity_text_pred)
+                            else:
+                                overlap_entity_dict[entity_type_pred] = entity_text_pred
+
+                        ann_pred_j -= 1
+
                     entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                    csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                    csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, None, overlap_entity_dict, sent_text])
 
                     ann_truth_i += 1
 
                 elif entity_annotations_pred[ann_pred_i].start_word_index < entity_annotations_truth[ann_truth_i].start_word_index:
-                    # Collect truth entity(ies) formed in the same text span as current predicted entity
+                    # Collect truth entity(ies) corresponding to the current predicted entity
+
+                    # First collect at the same text span as current predicted entity's using token level name entity label.
                     entity_truth_arr = []
                     for word_index in range(entity_annotations_pred[ann_pred_i].start_word_index,
                                             entity_annotations_pred[ann_pred_i].end_word_index):
@@ -480,8 +528,45 @@ class NER:
                     entity_truth_str = "_".join(entity_truth_arr)
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
 
+                    # Now collect truth entity(ies) overlapping(partial or complete) current predicted entity
+                    overlap_entity_dict = dict()
+
+                    # Keep moving truth entities forward till there's overlap with current predicted entity
+                    ann_truth_j = ann_truth_i
+                    while (ann_truth_j < len(entity_annotations_truth)) and \
+                            (entity_annotations_truth[ann_truth_j].start_word_index < entity_annotations_pred[ann_pred_i].end_word_index):
+
+                        entity_type_truth = entity_annotations_truth[ann_truth_j].type
+                        entity_text_truth = document_obj.text[entity_annotations_truth[ann_truth_j].start_char_pos: entity_annotations_truth[ann_truth_j].end_char_pos]
+
+                        if entity_type_truth in overlap_entity_dict:
+                            if isinstance(overlap_entity_dict[entity_type_truth], str):
+                                overlap_entity_dict[entity_type_truth] = [overlap_entity_dict[entity_type_truth]]
+                            overlap_entity_dict[entity_type_truth].append(entity_text_truth)
+                        else:
+                            overlap_entity_dict[entity_type_truth] = entity_text_truth
+
+                        ann_truth_j += 1
+
+                    # Now move truth entities in backward direction till there's overlap with current predicted entity
+                    ann_truth_j = ann_truth_i - 1
+                    while (ann_truth_j >= 0) and (entity_annotations_truth[ann_truth_j].end_word_index > entity_annotations_pred[ann_pred_i].start_word_index):
+                        if entity_annotations_truth[ann_truth_j].start_word_index < entity_annotations_pred[ann_pred_i].end_word_index:
+                            entity_type_truth = entity_annotations_truth[ann_truth_j].type
+                            entity_text_truth = document_obj.text[entity_annotations_truth[ann_truth_j].start_char_pos:
+                            entity_annotations_truth[ann_truth_j].end_char_pos]
+
+                            if entity_type_truth in overlap_entity_dict:
+                                if isinstance(overlap_entity_dict[entity_type_truth], str):
+                                    overlap_entity_dict[entity_type_truth] = [overlap_entity_dict[entity_type_truth]]
+                                overlap_entity_dict[entity_type_truth].append(entity_text_truth)
+                            else:
+                                overlap_entity_dict[entity_type_truth] = entity_text_truth
+
+                        ann_truth_j -= 1
+
                     entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                    csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                    csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, overlap_entity_dict, None, sent_text])
 
                     ann_pred_i += 1
                 else:
@@ -490,19 +575,29 @@ class NER:
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
 
                     if entity_annotations_truth[ann_truth_i].end_word_index < entity_annotations_pred[ann_pred_i].end_word_index:
+
+                        # Collect predicted entity overlapping current truth entity
+                        overlap_entity_dict = dict()
+                        overlap_entity_dict[entity_pred_str] = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
+
                         entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                        csv_writer.writerow([protocol_id, sent_i, True, False, correct_predict, entity_truth_str, entity_pred_str, entity_text, None, overlap_entity_dict, sent_text])
                         ann_truth_i += 1
                     elif entity_annotations_pred[ann_pred_i].end_word_index < entity_annotations_truth[ann_truth_i].end_word_index:
+                        # Collect truth entity overlapping current predicted entity
+                        overlap_entity_dict = dict()
+                        overlap_entity_dict[entity_truth_str] = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
+
                         entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
+
+                        csv_writer.writerow([protocol_id, sent_i, False, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, overlap_entity_dict, None, sent_text])
                         ann_pred_i += 1
                     else:
                         # Both current truth and predicted entity have same text span
                         if entity_annotations_truth[ann_truth_i].type == entity_annotations_pred[ann_pred_i].type:
                             correct_predict = True
                         entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                        csv_writer.writerow([protocol_id, sent_i, True, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                        csv_writer.writerow([protocol_id, sent_i, True, True, correct_predict, entity_truth_str, entity_pred_str, entity_text, None, None, sent_text])
                         ann_truth_i += 1
                         ann_pred_i += 1
 
@@ -511,6 +606,7 @@ class NER:
                         (entity_annotations_truth[ann_truth_i].start_word_index >= entity_annotations_pred[-1].end_word_index):
                     entity_truth_str = entity_annotations_truth[ann_truth_i].type
                     entity_pred_str = "O"
+                    overlap_entity_dict = None
                 else:
                     entity_pred_arr = []
                     for word_index in range(entity_annotations_truth[ann_truth_i].start_word_index,
@@ -533,14 +629,35 @@ class NER:
                     entity_truth_str = entity_annotations_truth[ann_truth_i].type
                     entity_pred_str = "_".join(entity_pred_arr)
 
+                    # Now collect predicted entity(ies) overlapping with current truth entity
+                    overlap_entity_dict = dict()
+
+                    # Now keep moving predicted entities backward till there's overlap with current truth entity
+                    ann_pred_j = len(entity_annotations_pred) - 1
+                    while (ann_pred_j >= 0) and (entity_annotations_pred[ann_pred_j].end_word_index > entity_annotations_truth[ann_truth_i].start_word_index):
+                        if entity_annotations_pred[ann_pred_j].start_word_index < entity_annotations_truth[ann_truth_i].end_word_index:
+                            entity_type_pred = entity_annotations_pred[ann_pred_j].type
+                            entity_text_pred = document_obj.text[entity_annotations_pred[ann_pred_j].start_char_pos:
+                            entity_annotations_pred[ann_pred_j].end_char_pos]
+
+                            if entity_type_pred in overlap_entity_dict:
+                                if isinstance(overlap_entity_dict[entity_type_pred], str):
+                                    overlap_entity_dict[entity_type_pred] = [overlap_entity_dict[entity_type_pred]]
+                                overlap_entity_dict[entity_type_pred].append(entity_text_pred)
+                            else:
+                                overlap_entity_dict[entity_type_pred] = entity_text_pred
+
+                        ann_pred_j -= 1
+
                 entity_text = document_obj.text[entity_annotations_truth[ann_truth_i].start_char_pos: entity_annotations_truth[ann_truth_i].end_char_pos]
-                csv_writer.writerow([protocol_id, sent_i, True, False, False, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                csv_writer.writerow([protocol_id, sent_i, True, False, False, entity_truth_str, entity_pred_str, entity_text, None, overlap_entity_dict, sent_text])
                 ann_truth_i += 1
 
             while ann_pred_i < len(entity_annotations_pred):
                 if (len(entity_annotations_truth) == 0) or (entity_annotations_pred[ann_pred_i].start_word_index >= entity_annotations_truth[-1].end_word_index):
                     entity_truth_str = "O"
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
+                    overlap_entity_dict = None
                 else:
                     entity_truth_arr = []
                     for word_index in range(entity_annotations_pred[ann_pred_i].start_word_index,
@@ -556,12 +673,36 @@ class NER:
                     entity_truth_str = "_".join(entity_truth_arr)
                     entity_pred_str = entity_annotations_pred[ann_pred_i].type
 
+                    # Now collect truth entity(ies) overlapping with current predicted entity
+                    overlap_entity_dict = dict()
+
+                    # Move truth entities in backward direction till there's overlap with current predicted entity
+                    ann_truth_j = len(entity_annotations_truth) - 1
+                    while (ann_truth_j >= 0) and (
+                        entity_annotations_truth[ann_truth_j].end_word_index > entity_annotations_pred[
+                        ann_pred_i].start_word_index):
+                        if entity_annotations_truth[ann_truth_j].start_word_index < entity_annotations_pred[
+                            ann_pred_i].end_word_index:
+                            entity_type_truth = entity_annotations_truth[ann_truth_j].type
+                            entity_text_truth = document_obj.text[entity_annotations_truth[ann_truth_j].start_char_pos:
+                            entity_annotations_truth[ann_truth_j].end_char_pos]
+
+                            if entity_type_truth in overlap_entity_dict:
+                                if isinstance(overlap_entity_dict[entity_type_truth], str):
+                                    overlap_entity_dict[entity_type_truth] = [overlap_entity_dict[entity_type_truth]]
+                                overlap_entity_dict[entity_type_truth].append(entity_text_truth)
+                            else:
+                                overlap_entity_dict[entity_type_truth] = entity_text_truth
+
+                        ann_truth_j -= 1
+
                 entity_text = document_obj.text[entity_annotations_pred[ann_pred_i].start_char_pos: entity_annotations_pred[ann_pred_i].end_char_pos]
-                csv_writer.writerow([protocol_id, sent_i, False, True, False, entity_truth_str, entity_pred_str, entity_text, sent_text])
+                csv_writer.writerow([protocol_id, sent_i, False, True, False, entity_truth_str, entity_pred_str, entity_text, overlap_entity_dict, None, sent_text])
                 ann_pred_i += 1
 
         csv_output.seek(0)
-        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred", "entity_truth", "entity_pred", "text", "sentence"]
+        df_columns = ["protocol_id", "sent_index", "flag_entity_truth", "flag_entity_pred", "correct_pred",
+                      "entity_truth", "entity_pred", "text", "overlap_entity_truth", "overlap_entity_pred", "sentence"]
         df = pd.read_csv(filepath_or_buffer=csv_output, names=df_columns)
 
         return df
@@ -584,7 +725,7 @@ def main(args):
     if args.evaluate_collection:
         start_time = time.time()
         dev_X, dev_y = ner_obj.process_collection(data_dir=args.dev_data_dir, ann_format=args.ann_format)
-        print('\nprocess_collection() for dev data took {:.3f} seconds\n'.format(time.time() - start_time))
+        print('\nprocess_collection() for dev data({}) took {:.3f} seconds\n'.format(args.dev_data_dir, time.time() - start_time))
 
         start_time = time.time()
         ner_obj.evaluate(X_test=dev_X, y_test=dev_y, ann_format=args.ann_format)
@@ -602,7 +743,7 @@ def main(args):
 
     if args.debug_collection:
         df = ner_obj.compare_truth_predict_collection(data_dir=args.train_data_dir)
-        output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", args.train_data_dir)
+        output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", os.path.basename(os.path.dirname(args.train_data_dir)))
         if not os.path.exists(output_data_dir):
             os.makedirs(output_data_dir)
         output_filename = os.path.join(output_data_dir, os.path.basename(os.path.dirname(args.train_data_dir)) + "_confusers.csv")
