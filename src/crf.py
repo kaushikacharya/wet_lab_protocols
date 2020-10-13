@@ -12,6 +12,7 @@ Execution command example
 
 import argparse
 from csv import writer
+from datetime import datetime
 import glob
 import io
 import joblib
@@ -112,7 +113,7 @@ class NER:
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
 
-        model_file_path = os.path.join(model_dir, "model_" + ann_format+".pkl")
+        model_file_path = os.path.join(model_dir, "model_{}.pkl".format(ann_format))
         joblib.dump(value=self.crf, filename=model_file_path)
         print("Model saved: {}".format(model_file_path))
 
@@ -120,9 +121,14 @@ class NER:
         self.crf = joblib.load(filename=filename)
 
     def evaluate(self, X_test, y_test, ann_format="conll"):
-        """Evaluate
+        """Evaluate named entity predictions against gold standard.
+            Compared at both token level as well as entity level.
 
-            Reference:
+            Returns
+            -------
+            confusion matrix at token level
+
+            Reference
             ---------
                 https://towardsdatascience.com/entity-level-evaluation-for-ner-task-c21fb3a8edf
                 - seqeval for entity level metrics
@@ -148,6 +154,8 @@ class NER:
         ))
 
         print("\n---- Entity level metrics ----\n")
+        print("Precision: {}".format(seqeval_metrics.precision_score(y_true=y_test, y_pred=y_pred)))
+        print("Recall: {}".format(seqeval_metrics.recall_score(y_true=y_test, y_pred=y_pred)))
         print("F1: {}".format(seqeval_metrics.f1_score(y_true=y_test, y_pred=y_pred)))
 
         print(seqeval_metrics.classification_report(y_true=y_test, y_pred=y_pred, digits=3))
@@ -163,20 +171,9 @@ class NER:
             y_pred_arr.extend(elem)
 
         conf_matrix = sklearn_metrics.confusion_matrix(y_test_arr, y_pred_arr, labels=sorted_labels)
-        df = pd.DataFrame(data=conf_matrix, index=sorted_labels, columns=sorted_labels, dtype=int)
+        df_conf = pd.DataFrame(data=conf_matrix, index=sorted_labels, columns=sorted_labels, dtype=int)
 
-        confusion_matrix_dir = os.path.join(os.path.dirname(__file__), "../output/confusion_matrix")
-
-        if not os.path.exists(confusion_matrix_dir):
-            os.makedirs(confusion_matrix_dir)
-
-        confusion_matrix_file = os.path.join(confusion_matrix_dir, "confusion_matrix_" + ann_format + ".csv")
-        df.to_csv(path_or_buf=confusion_matrix_file, index=True)
-
-        # pd.set_option('display.max_rows', len(sorted_labels)+5)
-        # pd.set_option('display.max_columns', len(sorted_labels))
-        # print("\n------Confusion Matrix -----\n")
-        # print(df)
+        return df_conf
 
     def predict_collection(self, input_data_dir, output_data_dir, ann_format="standoff"):
         """Predict Named Entity for each of the protocol in the input_data_dir
@@ -728,8 +725,18 @@ def main(args):
         print('\nprocess_collection() for dev data({}) took {:.3f} seconds\n'.format(args.dev_data_dir, time.time() - start_time))
 
         start_time = time.time()
-        ner_obj.evaluate(X_test=dev_X, y_test=dev_y, ann_format=args.ann_format)
+        df_conf = ner_obj.evaluate(X_test=dev_X, y_test=dev_y, ann_format=args.ann_format)
         print('\nEvaluate took {:.3f} seconds\n'.format(time.time() - start_time))
+
+        confusion_matrix_dir = os.path.join(os.path.dirname(__file__), "../output/confusion_matrix",
+                                            os.path.basename(os.path.dirname(args.dev_data_dir)))
+
+        if not os.path.exists(confusion_matrix_dir):
+            os.makedirs(confusion_matrix_dir)
+
+        confusion_matrix_file = os.path.join(confusion_matrix_dir, "confusion_matrix_" + args.ann_format + "_" +
+                                             datetime.now().strftime("%Y%b%d_%H%M%S") + ".csv")
+        df_conf.to_csv(path_or_buf=confusion_matrix_file, index=True)
 
     if args.predict_collection:
         start_time = time.time()
@@ -746,7 +753,8 @@ def main(args):
         output_data_dir = os.path.join(os.path.dirname(__file__), "../output/predict_debug", os.path.basename(os.path.dirname(args.train_data_dir)))
         if not os.path.exists(output_data_dir):
             os.makedirs(output_data_dir)
-        output_filename = os.path.join(output_data_dir, os.path.basename(os.path.dirname(args.train_data_dir)) + "_confusers.csv")
+        output_filename = os.path.join(output_data_dir, os.path.basename(os.path.dirname(args.train_data_dir)) +
+                                       "_confusers_" + args.ann_format + "_" +  datetime.now().strftime("%Y%b%d_%H%M%S") + ".csv")
         df.to_csv(path_or_buf=output_filename, index=False)
 
     if args.debug_protocol_id is not None:
