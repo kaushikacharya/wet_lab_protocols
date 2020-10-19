@@ -1,9 +1,26 @@
 # Wet Lab Protocols
 
-This repository contains the Conditional Random Fields (CRF) model for the shared task.
+This repository contains the Conditional Random Fields (CRF) model for the shared task [ Entity and relation recognition over wet-lab protocols](http://noisy-text.github.io/2020/wlp-task.html).
+This shared task was part of the [6th Workshop on Noisy User-generated Text](http://noisy-text.github.io/2020/index.html) held in 2020.
 
-#### Shared Task:
-http://noisy-text.github.io/2020/wlp-task.html
+#### Task: Named Entity Recognition
+
+The task involves extracting 18 entity classes from Wet Lab Protocols.
+The entity classes are described in [An Annotated Corpus for Machine Reading of Instructions in Wet Lab Protocols by Kulkarni et al(2018)](https://www.aclweb.org/anthology/N18-2016.pdf).
+Have a look at ***Annotation Guidelines*** section of the paper for detailed description of the entity classes. 
+
+##### Example:
+    
+![BRAT annotation](./images/brat_annotations.png)
+
+Sentence #6 shows the following entities:
+
+| Entity   | Text      |
+| -------- | --------- |
+| Action   | Mix       |
+| Modifier | thoroughly|
+| Action   | pulse-spin|
+| Device   | microfuge |
 
 ##### BRAT styled annotated protocols
 http://kb1.cse.ohio-state.edu:8010/index.xhtml#/wnut_20_data/
