@@ -99,9 +99,11 @@ class Token:
             a) part of speech tagging
             b) syntactic parsing
     """
-    def __init__(self, start_char_pos=None, end_char_pos=None, part_of_speech=None, dependency_tag=None, head_index=None, children_index_arr=None):
+    def __init__(self, start_char_pos=None, end_char_pos=None, lemma=None, part_of_speech=None, dependency_tag=None,
+                 head_index=None, children_index_arr=None):
         self.start_char_pos = start_char_pos
         self.end_char_pos = end_char_pos
+        self.lemma = lemma
         self.part_of_speech = part_of_speech
         self.dependency_tag = dependency_tag
         self.head_index = head_index
@@ -283,7 +285,7 @@ class Document:
             char_pos = end_char_pos_word
 
         # store the count of sentences till now
-        n_sents_upto_prev_line = len(self.sentences)
+        start_sent_index_line = len(self.sentences)
 
         # Now populate sentences and tokens
         end_char_pos_line = char_pos
@@ -431,7 +433,7 @@ class Document:
                     word_index += 1
                 '''
 
-                cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token,
+                cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token, lemma=token.lemma_,
                                   part_of_speech=token.pos_, dependency_tag=token.dep_, head_index=head_index_token,
                                   children_index_arr=children_index_arr_token)
                 self.tokens.append(cur_token)
@@ -457,7 +459,7 @@ class Document:
         # append line to line list
         self.lines.append(Line(start_char_pos=start_char_pos_line, end_char_pos=char_pos,
                                start_word_index=start_word_index_line, end_word_index=len(self.words),
-                               start_sent_index=n_sents_upto_prev_line, end_sent_index=len(self.sentences)))
+                               start_sent_index=start_sent_index_line, end_sent_index=len(self.sentences)))
 
     def parse_protocol_step_standoff(self, start_char_pos_line, end_char_pos_line, verbose=False):
         """Parse protocol step using Standoff format annotations.
@@ -476,6 +478,8 @@ class Document:
             line_text = self.text[start_char_pos_line: end_char_pos_line]
             print("\nLine #{} :: char pos range: ({}, {}) :: text: {}".format(len(self.lines), start_char_pos_line,
                                                                               end_char_pos_line, line_text.encode("utf-8")))
+
+        start_word_index_line = len(self.words)
 
         # store the count of sentences till now
         start_sent_index_line = len(self.sentences)
@@ -520,7 +524,7 @@ class Document:
                           " Head: {}".format(len(self.tokens), start_char_pos_token, end_char_pos_token,
                                              token_text.encode("utf-8"), token.pos_, token.dep_, head_index_token))
 
-                cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token,
+                cur_token = Token(start_char_pos=start_char_pos_token, end_char_pos=end_char_pos_token, lemma=token.lemma_,
                                   part_of_speech=token.pos_, dependency_tag=token.dep_, head_index=head_index_token,
                                   children_index_arr=children_index_arr_token)
                 self.tokens.append(cur_token)
@@ -600,6 +604,17 @@ class Document:
                         # If next word(s) also belongs to this entity, then it will be updated again in the next iteration of the words
                         self.entity_annotations[self.entity_ann_index].end_word_index = len(self.words)+1
 
+                        # case: Multiple entities are formed with the current word. These entities are formed with different sub-words of the word  #noqa
+                        # e.g. protocol id: 110  line: 4  word: ~2mm  entities: a) ~  b) 2mm
+                        while self.entity_annotations[self.entity_ann_index].end_char_pos < end_char_pos_word:
+                            if self.entity_ann_index < (len(self.entity_annotations) - 1):
+                                # TODO ner_tag for the word should be a list now
+                                self.entity_ann_index += 1
+                                self.entity_annotations[self.entity_ann_index].start_word_index = len(self.words)
+                                self.entity_annotations[self.entity_ann_index].end_word_index = len(self.words) + 1
+                            else:
+                                break
+
                 if verbose:
                     word_text = self.text[start_char_pos_word: end_char_pos_word]
                     print("\t\tWord #{}: {} :: char pos range: ({}, {}) :: token range: ({}, {}) :: NER label: {}".format(
@@ -624,6 +639,7 @@ class Document:
 
         # append line to the list
         self.lines.append(Line(start_char_pos=start_char_pos_line, end_char_pos=end_char_pos_line,
+                               start_word_index=start_word_index_line, end_word_index=len(self.words),
                                start_sent_index=start_sent_index_line, end_sent_index=len(self.sentences)))
 
     def display_document(self):
