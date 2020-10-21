@@ -6,6 +6,7 @@ Statistics for the annotations.
 
 import argparse
 from csv import writer
+import glob
 import io
 import os
 import pandas as pd
@@ -28,40 +29,47 @@ class AnnotationStatistics:
         self.nlp_process_obj.load_nlp_model(verbose=verbose)
         self.nlp_process_obj.build_sentencizer(verbose=verbose)
 
-    def process_dataset(self, data_dir):
+    def process_dataset(self, data_dir, ann_format):
         """Process protocols in the dataset"""
-        # Iterate over each of the files in the folder (train, dev)
-        for f in os.listdir(os.path.join(data_dir, "Conll_Format")):
-            # print(f)
-            m = re.search(r"\d+", f)
-            if m is None:
-                print("file: {} not in expected format".format(f))
-                continue
+        # Iterate over each of the files in the data_dir
+        for f in glob.glob(os.path.join(data_dir, "Standoff_Format", "*.txt")):
+            # extract the protocol_id
+            file_basename, _ = os.path.splitext(os.path.basename(f))
+            protocol_id = file_basename[len("protocol_"):]
 
-            protocol_id = m.group(0)
             file_document = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".txt")
-            file_conll_ann = os.path.join(data_dir, "Conll_Format/protocol_" + protocol_id + "_conll.txt")
+            if ann_format == "conll":
+                file_ann = os.path.join(data_dir, "Conll_Format/protocol_" + protocol_id + "_conll.txt")
+            elif ann_format == "standoff":
+                file_ann = os.path.join(data_dir, "Standoff_Format/protocol_" + protocol_id + ".ann")
+            else:
+                assert False, "Unexpected ann_format: {}".format(ann_format)
 
             if not os.path.exists(file_document):
                 print("{} missing".format(file_document))
                 continue
 
-            if not os.path.exists(file_conll_ann):
-                print("{} missing".format(file_conll_ann))
+            if not os.path.exists(file_ann):
+                print("{} missing".format(file_ann))
                 continue
 
-            # print("text file: {}, conll annotated file: {}".format(file_document, file_conll_ann))
             try:
-                self.process_protocol(doc_id=int(protocol_id), doc_file=file_document, conll_ann_file=file_conll_ann)
+                self.process_protocol(doc_id=int(protocol_id), doc_file=file_document, ann_file=file_ann, ann_format=ann_format)
             except:
                 print("Crashed in protocol_id: {}".format(protocol_id))
                 traceback.print_exc()
 
-    def process_protocol(self, doc_id, doc_file, conll_ann_file):
+    def process_protocol(self, doc_id, doc_file, ann_file, ann_format):
         """Process a single protocol document"""
         doc_obj = Document(doc_id=doc_id, nlp_process_obj=self.nlp_process_obj)
         doc_obj.parse_document(document_file=doc_file)
-        doc_obj.parse_conll_annotation(conll_ann_file=conll_ann_file)
+
+        if ann_format == "conll":
+            doc_obj.parse_conll_annotation(conll_ann_file=ann_file)
+        elif ann_format == "standoff":
+            doc_obj.parse_standoff_annotation(ann_file=ann_file)
+        else:
+            assert False, "Unexpected ann_format: {}".format(ann_format)
 
         ann_i = 0
         # ??? Isn't that the text statistics can also be collected by iterating over the entities
@@ -156,13 +164,12 @@ class AnnotationStatistics:
 
             self.entity_statistics_dict[entity_type_ann].dependency_dict[dependency_tags_str].append(doc_id)
 
-
     def display_entity_tag_stats(self):
         for entity_tag in self.entity_statistics_dict:
             print("entity: {} :: count: {} :: unique text count: {}".format(
                 entity_tag, self.entity_statistics_dict[entity_tag].count, len(self.entity_statistics_dict[entity_tag].text_dict)))
 
-    def write_annotation_data(self):
+    def write_annotation_data(self, data_dir, ann_format):
         """Write annotation data collected over the dataset.
             This would be useful in analyzing the instances of entity tags.
         """
@@ -178,10 +185,10 @@ class AnnotationStatistics:
 
         df = pd.read_csv(filepath_or_buffer=csv_output, names=["entity", "text_lower", "count", "doc_ids"])
 
-        output_dir = os.path.join(os.path.dirname(__file__), "../output/statistics")
+        output_dir = os.path.join(os.path.dirname(__file__), "../output/statistics", os.path.basename(os.path.dirname(data_dir)))
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        output_file = os.path.join(output_dir, "entity_tags.csv")
+        output_file = os.path.join(output_dir, os.path.basename(os.path.dirname(data_dir)) + "_" + ann_format + "_entity_tags.csv")
 
         df.to_csv(path_or_buf=output_file, index=False)
 
@@ -196,7 +203,7 @@ class AnnotationStatistics:
         csv_dep_output.seek(0)
 
         df = pd.read_csv(filepath_or_buffer=csv_dep_output, names=["entity", "dependency", "count", "doc_ids"])
-        output_file = os.path.join(output_dir, "entity_dependency.csv")
+        output_file = os.path.join(output_dir, os.path.basename(os.path.dirname(data_dir)) + "_" + ann_format + "_entity_dependency.csv")
 
         df.to_csv(path_or_buf=output_file, index=False)
 
@@ -213,10 +220,26 @@ class EntityStatistics:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", action="store", default="C:/KA/lib/WNUT_2020/data/train_data/", dest="data_dir")
+    parser.add_argument("--ann_format", action="store", default="conll", dest="ann_format",
+                        help="Either conll or standoff")
+    parser.add_argument("--protocol_id", action="store", default=None, dest="protocol_id", help="Useful for debugging")
 
     args = parser.parse_args()
+    print("args: {}".format(args))
 
     ann_stats_obj = AnnotationStatistics()
-    ann_stats_obj.process_dataset(data_dir=args.data_dir)
-    ann_stats_obj.display_entity_tag_stats()
-    ann_stats_obj.write_annotation_data()
+    if args.protocol_id:
+        file_document = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".txt")
+
+        if args.ann_format == "conll":
+            file_ann = os.path.join(args.data_dir, "Conll_Format/protocol_" + args.protocol_id + "_conll.txt")
+        elif args.ann_format == "standoff":
+            file_ann = os.path.join(args.data_dir, "Standoff_Format/protocol_" + args.protocol_id + ".ann")
+        else:
+            assert False, "Unexpected ann_format: {}".format(args.ann_format)
+
+        ann_stats_obj.process_protocol(doc_id=args.protocol_id, doc_file=file_document, ann_file=file_ann, ann_format=args.ann_format)
+    else:
+        ann_stats_obj.process_dataset(data_dir=args.data_dir, ann_format=args.ann_format)
+        ann_stats_obj.display_entity_tag_stats()
+        ann_stats_obj.write_annotation_data(data_dir=args.data_dir, ann_format=args.ann_format)
