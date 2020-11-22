@@ -57,6 +57,30 @@ Below are the example commands.
           python -m src.crf --train_model ./output/models/model_standoff.pkl --evaluate_collection
         ```
     - Predict on test set
-       ```python
+        ```python
           python -m src.crf --train_model ./output/models/model_standoff.pkl --predict_collection
         ``` 
+        
+#### Publication
+
+[KaushikAcharya at WNUT 2020 Shared Task-1: Conditional Random
+Field(CRF) based Named Entity Recognition(NER) for Wet Lab Protocols](https://www.aclweb.org/anthology/2020.wnut-1.37/)
+(EMNLP | WNUT)
+
+#### Citation
+If you find this implementation helpful, please consider citing:
+
+```
+@inproceedings{acharya-2020-wnut,
+    title = "{WNUT} 2020 Shared Task-1: Conditional Random Field({CRF}) based Named Entity Recognition({NER}) for Wet Lab Protocols",
+    author = "Acharya, Kaushik",
+    booktitle = "Proceedings of the Sixth Workshop on Noisy User-generated Text (W-NUT 2020)",
+    month = nov,
+    year = "2020",
+    address = "Online",
+    publisher = "Association for Computational Linguistics",
+    url = "https://www.aclweb.org/anthology/2020.wnut-1.37",
+    pages = "286--289",
+    abstract = "The paper describes how classifier model built using Conditional Random Field detects named entities in wet lab protocols.",
+}
+```
