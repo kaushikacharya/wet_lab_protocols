@@ -84,3 +84,8 @@ If you find this implementation helpful, please consider citing:
     abstract = "The paper describes how classifier model built using Conditional Random Field detects named entities in wet lab protocols.",
 }
 ```
+
+#### Related Work
+- MEDDOPROF
+    - https://github.com/kaushikacharya/clinical_occupation_recognition
+    - Named Entity Recognition and Normalization on Spanish medical documents.
